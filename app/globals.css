@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-paper text-ink font-body antialiased;
+  }
+
+  .dark body {
+    @apply bg-ink text-paper;
+  }
+
+  * {
+    @apply border-slate-border dark:border-slate-border-dark;
+  }
+
+  ::selection {
+    @apply bg-cobalt/20;
+  }
+
+  /* Visible keyboard focus everywhere, respecting the brand accent */
+  :focus-visible {
+    outline: 2px solid #3654ff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-slate/30 rounded-full;
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+/* Prose styling for AI markdown responses */
+.ai-prose {
+  @apply text-[15px] leading-7;
+}
+.ai-prose h1,
+.ai-prose h2,
+.ai-prose h3 {
+  @apply font-display font-medium mt-6 mb-2 text-ink dark:text-paper;
+}
+.ai-prose h1 {
+  @apply text-xl;
+}
+.ai-prose h2 {
+  @apply text-lg;
+}
+.ai-prose h3 {
+  @apply text-base;
+}
+.ai-prose p {
+  @apply mb-4;
+}
+.ai-prose ul,
+.ai-prose ol {
+  @apply mb-4 pl-5 space-y-1.5;
+}
+.ai-prose ul {
+  @apply list-disc;
+}
+.ai-prose ol {
+  @apply list-decimal;
+}
+.ai-prose a {
+  @apply text-cobalt underline underline-offset-2 decoration-cobalt/40 hover:decoration-cobalt;
+}
+.ai-prose code {
+  @apply font-mono text-[13px] bg-slate-border/40 dark:bg-surface-dark-raised px-1.5 py-0.5 rounded;
+}
+.ai-prose pre {
+  @apply bg-surface-dark text-paper rounded-xl p-4 overflow-x-auto mb-4 text-[13px] font-mono;
+}
+.ai-prose pre code {
+  @apply bg-transparent p-0;
+}
+.ai-prose table {
+  @apply w-full text-left mb-4 border-collapse text-[14px];
+}
+.ai-prose th,
+.ai-prose td {
+  @apply border border-slate-border dark:border-slate-border-dark px-3 py-2;
+}
+.ai-prose th {
+  @apply bg-surface-light dark:bg-surface-dark-raised font-medium;
+}
