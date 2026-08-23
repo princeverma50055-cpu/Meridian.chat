@@ -67,20 +67,19 @@ export function getAIProvider(): AIProvider {
   }
 
   switch (providerName) {
-    case 'anthropic': {
-      // Lazy require avoids bundling the SDK into any client component that
-      // might accidentally import this file.
-      const { anthropicProvider } = require('@/lib/ai/providers/anthropic');
-      return anthropicProvider;
-    }
-    case 'openai':
-      throw new Error(
-        'OpenAI provider not yet implemented. Add lib/ai/providers/openai.ts implementing AIProvider and wire it here.'
-      );
     case 'google': {
       const { googleProvider } = require('@/lib/ai/providers/google');
       return googleProvider;
     }
+    case 'anthropic':
+      throw new Error(
+        'Anthropic provider file was removed from this project. Add lib/ai/providers/anthropic.ts back, ' +
+          'or set MERIDIAN_MODEL_PROVIDER=google in .env.local.'
+      );
+    case 'openai':
+      throw new Error(
+        'OpenAI provider not yet implemented. Add lib/ai/providers/openai.ts implementing AIProvider and wire it here.'
+      );
     default:
       throw new Error(`Unknown MERIDIAN_MODEL_PROVIDER: "${providerName}"`);
   }
