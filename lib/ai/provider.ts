@@ -77,6 +77,10 @@ export function getAIProvider(): AIProvider {
       throw new Error(
         'OpenAI provider not yet implemented. Add lib/ai/providers/openai.ts implementing AIProvider and wire it here.'
       );
+    case 'google': {
+      const { googleProvider } = require('@/lib/ai/providers/google');
+      return googleProvider;
+    }
     default:
       throw new Error(`Unknown MERIDIAN_MODEL_PROVIDER: "${providerName}"`);
   }
