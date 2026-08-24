@@ -35,7 +35,7 @@ export async function extractText(buffer: Buffer, mimeType: string, fileName: st
       const workbook = XLSX.read(buffer, { type: 'buffer' });
       const text = workbook.SheetNames.map((name) => {
         const sheet = workbook.Sheets[name];
-        return `Sheet: ${name}\n${XLSX.utils.sheet_to_csv(sheet)}`;
+        return `Sheet: ${name}\n${sheet ? XLSX.utils.sheet_to_csv(sheet) : ''}`;
       }).join('\n\n');
       return { text, supported: true };
     }
