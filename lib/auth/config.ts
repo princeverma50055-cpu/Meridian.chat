@@ -2,15 +2,9 @@ import type { NextAuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 import CredentialsProvider from 'next-auth/providers/credentials';
 
-/**
- * Central auth configuration. Passwords are never handled directly here —
- * CredentialsProvider.authorize() should call your own hashed-password
- * verification against the users table (e.g. via bcrypt), and Google OAuth
- * is enabled automatically once GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
- * are present in the environment.
- */
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt' },
+  trustHost: true,
   pages: {
     signIn: '/login'
   },
