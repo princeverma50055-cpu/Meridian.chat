@@ -46,7 +46,7 @@ export function ModelSelector({
     <Dropdown
       trigger={
         <button className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-ink hover:bg-surface-light dark:text-paper dark:hover:bg-surface-dark-raised">
-          {current.label}
+          {current?.label ?? 'Select Model'}
           <ChevronDown size={14} className="text-slate" />
         </button>
       }
