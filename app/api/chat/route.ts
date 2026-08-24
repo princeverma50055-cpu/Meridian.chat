@@ -126,6 +126,11 @@ export async function POST(req: NextRequest) {
     try {
       const embeddingsProvider = getEmbeddingsProvider();
       const [queryEmbedding] = await embeddingsProvider.embed([body.message]);
+
+      if (!queryEmbedding) {
+        throw new Error('Failed to generate embedding for the message');
+      }
+
       const matches = await searchSimilarChunks(body.fileIds, queryEmbedding, 6);
 
       if (matches.length > 0) {
