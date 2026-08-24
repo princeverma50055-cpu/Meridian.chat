@@ -26,7 +26,7 @@ export default function ChatPage() {
     setInput('');
   }
 
-  const title = messages.length > 0 ? messages[0].content.slice(0, 48) : 'New chat';
+  const title = messages[0]?.content ? messages[0].content.slice(0, 48) : 'New chat';
 
   return (
     <AppShell activeConversationId={conversationId}>
