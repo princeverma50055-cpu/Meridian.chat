@@ -63,6 +63,9 @@ export async function POST(req: NextRequest) {
   try {
     if (!conversationId) {
       const created = await createConversation(userId, deriveTitle(body.message));
+      if (!created) {
+        return jsonError('Failed to create conversation', 500);
+      }
       conversationId = created.id;
       isNewConversation = true;
     } else {
