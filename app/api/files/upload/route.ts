@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
       sizeBytes: file.size,
       storagePath
     });
+
+    if (!fileRecord) {
+      return NextResponse.json({ error: 'Failed to create file record' }, { status: 500 });
+    }
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to store file' },
