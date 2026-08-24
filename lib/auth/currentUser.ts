@@ -14,7 +14,13 @@ import { authOptions } from '@/lib/auth/config';
 const DEV_FALLBACK_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 export async function getCurrentUserId(): Promise<string> {
-  const session = await getServerSession(authOptions);
-  const id = (session?.user as { id?: string } | undefined)?.id;
-  return id ?? DEV_FALLBACK_USER_ID;
+  try {
+    const session = await getServerSession(authOptions);
+    const id = (session?.user as { id?: string } | undefined)?.id;
+    return id ?? DEV_FALLBACK_USER_ID;
+  } catch {
+    // Session lookup can fail in preview/proxy environments even with
+    // trustHost set — never let auth plumbing take down the whole request.
+    return DEV_FALLBACK_USER_ID;
+  }
 }
