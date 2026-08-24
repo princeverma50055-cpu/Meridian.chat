@@ -104,7 +104,9 @@ export async function POST(req: NextRequest) {
 
     await insertFileChunks(
       fileRecord.id,
-      chunks.map((content, i) => ({ content, embedding: embeddings[i] }))
+      chunks
+        .map((content, i) => ({ content, embedding: embeddings[i] }))
+        .filter((c): c is { content: string; embedding: number[] } => c.embedding !== undefined)
     );
     await setFileStatus(fileRecord.id, 'ready');
 
