@@ -44,7 +44,7 @@ function SectionCard({ children }: { children: React.ReactNode }) {
 
 function GeneralSettings() {
   const [language, setLanguage] = useState('English');
-  const [defaultModel, setDefaultModel] = useState(MODELS[0].id);
+  const [defaultModel, setDefaultModel] = useState(MODELS[0]?.id || '');
 
   return (
     <SectionCard>
