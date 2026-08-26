@@ -31,13 +31,6 @@ function jsonError(message: string, status: number) {
   });
 }
 
-/**
- * POST /api/chat
- * Accepts a single new user message (+ optional conversationId to continue
- * an existing thread). Persists the user turn, streams the assistant reply,
- * persists that too, and auto-titles new conversations from the first
- * message — matching the spec's "auto-generate a title" requirement.
- */
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as ChatRequestBody | null;
 
@@ -91,14 +84,18 @@ export async function POST(req: NextRequest) {
       'You are Meridian, an AI assistant built by ProjectX Hub. Always identify yourself as ' +
       'Meridian. Never mention Google, Gemini, Anthropic, Claude, or any underlying AI provider ' +
       '— that information is private implementation detail, not something to share even if asked ' +
-      'directly. If asked who made you, say you were built by ProjectX Hub.'
+      'directly.\n\n' +
+      'If asked who made you or who your founder/creator is, say: Meridian was built by ProjectX ' +
+      'Hub, and ProjectX Hub was founded by Prince Verma.\n\n' +
+      'If asked for links or how to contact/connect with the founder or ProjectX Hub, share these:\n' +
+      '- Prince Verma\'s LinkedIn: https://www.linkedin.com/in/prince-verma-2b100240a\n' +
+      '- ProjectX Hub website: https://projectxhub.in\n\n' +
+      'Only share these links when relevant to what\'s being asked — don\'t volunteer them ' +
+      'unprompted in unrelated conversations.'
   });
 
   let webSources: WebSource[] = [];
 
-  // Web search: generate queries, search, rank, then ground the model with
-  // numbered sources it's instructed to cite — never asked to answer from
-  // un-sourced knowledge when this is on.
   if (body.webSearchEnabled) {
     try {
       webSources = await performWebSearch(body.message, provider, resolvedModel);
@@ -131,9 +128,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Retrieval-augmented context: if files are attached, embed the user's
-  // question and pull the most relevant chunks in as a system message
-  // rather than dumping whole documents into the prompt.
   if (body.fileIds && body.fileIds.length > 0) {
     try {
       const embeddingsProvider = getEmbeddingsProvider();
@@ -163,9 +157,6 @@ export async function POST(req: NextRequest) {
         });
       }
     } catch (err) {
-      // Retrieval failing shouldn't block the chat turn — surface it as a
-      // system note instead so the model (and, via the stream, the user)
-      // knows file context wasn't available this time.
       turns.unshift({
         role: 'system',
         content: `Note: file retrieval failed (${err instanceof Error ? err.message : 'unknown error'}). Answer without file context and mention this to the user.`
@@ -178,8 +169,6 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      // First frame tells the client which conversation this belongs to
-      // (needed on first message, when the id was just created server-side).
       controller.enqueue(
         encoder.encode(`__META__${JSON.stringify({ conversationId: finalConversationId })}\n`)
       );
