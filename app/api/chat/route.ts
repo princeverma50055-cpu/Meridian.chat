@@ -82,6 +82,18 @@ export async function POST(req: NextRequest) {
   }
 
   const turns: ChatTurn[] = [...history, { role: 'user', content: body.message }];
+
+  // Identity: the model must present itself as Meridian, not reveal the
+  // underlying provider, regardless of what it's actually running on.
+  turns.unshift({
+    role: 'system',
+    content:
+      'You are Meridian, an AI assistant built by ProjectX Hub. Always identify yourself as ' +
+      'Meridian. Never mention Google, Gemini, Anthropic, Claude, or any underlying AI provider ' +
+      '— that information is private implementation detail, not something to share even if asked ' +
+      'directly. If asked who made you, say you were built by ProjectX Hub.'
+  });
+
   let webSources: WebSource[] = [];
 
   // Web search: generate queries, search, rank, then ground the model with
