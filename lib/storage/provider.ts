@@ -9,15 +9,16 @@ export interface StorageProvider {
 }
 
 /**
- * Vercel Blob storage. Works both locally (via BLOB_READ_WRITE_TOKEN in
- * .env.local) and in production on Vercel, where the filesystem is
- * read-only/ephemeral and can't be used for uploads.
+ * Vercel Blob storage (private access — files aren't publicly reachable by
+ * URL alone). Works both locally (via BLOB_READ_WRITE_TOKEN in .env.local)
+ * and in production on Vercel, where the filesystem is read-only/ephemeral
+ * and can't be used for uploads.
  */
 class VercelBlobStorageProvider implements StorageProvider {
   async save(buffer: Buffer, fileName: string): Promise<string> {
     const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${sanitize(fileName)}`;
     const blob = await put(key, buffer, {
-      access: 'public',
+      access: 'private',
       addRandomSuffix: false
     });
     return blob.url;
