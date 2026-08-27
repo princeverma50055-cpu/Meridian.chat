@@ -1,126 +1,49 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUserId } from '@/lib/auth/currentUser';
-import { getStorageProvider } from '@/lib/storage/provider';
-import { extractText } from '@/lib/files/extract';
-import { chunkText } from '@/lib/files/chunk';
-import { getEmbeddingsProvider } from '@/lib/embeddings/provider';
-import { isAllowedFile, MAX_FILE_SIZE_BYTES } from '@/lib/files/validation';
-import { createFileRecord, insertFileChunks, setFileStatus } from '@/lib/db/files';
+import { put, del } from '@vercel/blob';
 
-export const runtime = 'nodejs';
+export interface StorageProvider {
+  /** Saves a buffer under a generated key and returns the key. */
+  save(buffer: Buffer, fileName: string): Promise<string>;
+  /** Reads a previously saved file back into memory. */
+  read(key: string): Promise<Buffer>;
+  delete(key: string): Promise<void>;
+}
 
-export async function POST(req: NextRequest) {
-  const formData = await req.formData().catch(() => null);
-  if (!formData) {
-    return NextResponse.json({ error: 'Expected multipart/form-data with a "file" field' }, { status: 400 });
-  }
-
-  const file = formData.get('file');
-  const conversationId = formData.get('conversationId');
-
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-  }
-
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return NextResponse.json(
-      { error: `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)}MB, which exceeds the 20MB limit.` },
-      { status: 413 }
-    );
-  }
-
-  if (!isAllowedFile(file.type, file.name)) {
-    return NextResponse.json(
-      { error: `"${file.name}" has an unsupported file type (${file.type || 'unknown'}).` },
-      { status: 415 }
-    );
-  }
-
-  const userId = await getCurrentUserId();
-  const buffer = Buffer.from(await file.arrayBuffer());
-
-  let fileRecord;
-  try {
-    const storage = getStorageProvider();
-    const storagePath = await storage.save(buffer, file.name);
-
-    fileRecord = await createFileRecord({
-      userId,
-      conversationId: typeof conversationId === 'string' ? conversationId : undefined,
-      fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      storagePath
+/**
+ * Vercel Blob storage. Works both locally (via BLOB_READ_WRITE_TOKEN in
+ * .env.local) and in production on Vercel, where the filesystem is
+ * read-only/ephemeral and can't be used for uploads.
+ */
+class VercelBlobStorageProvider implements StorageProvider {
+  async save(buffer: Buffer, fileName: string): Promise<string> {
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${sanitize(fileName)}`;
+    const blob = await put(key, buffer, {
+      access: 'public',
+      addRandomSuffix: false
     });
-
-    if (!fileRecord) {
-      console.error('[files/upload] createFileRecord returned no row');
-      return NextResponse.json({ error: 'Failed to create file record' }, { status: 500 });
-    }
-  } catch (err) {
-    console.error('[files/upload] storage/db step failed:', err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to store file' },
-      { status: 500 }
-    );
+    return blob.url;
   }
 
-  // Extraction/embedding happen after the file record exists so the client
-  // always gets a fileId back immediately, with status reflecting progress
-  // rather than blocking the whole request on a slow embedding call.
-  try {
-    const { text, supported } = await extractText(buffer, fileRecord.mimeType, file.name);
-
-    if (!supported) {
-      await setFileStatus(fileRecord.id, 'unsupported');
-      return NextResponse.json({
-        file: { ...fileRecord, status: 'unsupported' },
-        note: 'File stored, but text extraction/RAG isn\'t implemented for this type yet.'
-      });
+  async read(key: string): Promise<Buffer> {
+    const res = await fetch(key);
+    if (!res.ok) {
+      throw new Error(`Failed to read file from storage (${res.status})`);
     }
-
-    if (!text.trim()) {
-      await setFileStatus(fileRecord.id, 'error', 'No extractable text found in file');
-      return NextResponse.json({ file: { ...fileRecord, status: 'error' } });
-    }
-
-    const chunks = chunkText(text);
-
-    let embeddings: number[][];
-    try {
-      const embeddingsProvider = getEmbeddingsProvider();
-      embeddings = await embeddingsProvider.embed(chunks);
-    } catch (err) {
-      console.error('[files/upload] embeddings failed:', err);
-      // File is stored and readable, just not searchable yet — don't fail
-      // the whole upload over a missing VOYAGE_API_KEY.
-      await setFileStatus(
-        fileRecord.id,
-        'error',
-        err instanceof Error ? err.message : 'Embedding failed'
-      );
-      return NextResponse.json({
-        file: { ...fileRecord, status: 'error' },
-        note: 'File stored, but embeddings failed — it won\'t be searchable until this is resolved.'
-      });
-    }
-
-    await insertFileChunks(
-      fileRecord.id,
-      chunks
-        .map((content, i) => ({ content, embedding: embeddings[i] }))
-        .filter((c): c is { content: string; embedding: number[] } => c.embedding !== undefined)
-    );
-    await setFileStatus(fileRecord.id, 'ready');
-
-    return NextResponse.json({ file: { ...fileRecord, status: 'ready' } });
-  } catch (err) {
-    console.error('[files/upload] extraction/processing failed:', err);
-    await setFileStatus(
-      fileRecord.id,
-      'error',
-      err instanceof Error ? err.message : 'Processing failed'
-    );
-    return NextResponse.json({ file: { ...fileRecord, status: 'error' } });
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
   }
+
+  async delete(key: string): Promise<void> {
+    await del(key);
+  }
+}
+
+function sanitize(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-80);
+}
+
+let cached: StorageProvider | null = null;
+
+export function getStorageProvider(): StorageProvider {
+  if (!cached) cached = new VercelBlobStorageProvider();
+  return cached;
 }
