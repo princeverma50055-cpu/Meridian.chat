@@ -1,13 +1,19 @@
-/**
- * Provider-agnostic AI interface. Every model provider (Anthropic, OpenAI,
- * Google, local models, etc.) implements this contract so the rest of the
- * app never talks to a vendor SDK directly. Swap providers by changing
- * MERIDIAN_MODEL_PROVIDER in .env — no UI or route code changes.
- */
+export interface TextPart {
+  type: 'text';
+  text: string;
+}
+
+export interface ImagePart {
+  type: 'image';
+  mimeType: string;
+  data: string; // base64
+}
+
+export type ContentPart = TextPart | ImagePart;
 
 export interface ChatTurn {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface GenerateOptions {
@@ -36,27 +42,13 @@ export interface GenerateResult {
 }
 
 export interface AIProvider {
-  /** Non-streaming generation. */
   generate(options: GenerateOptions): Promise<GenerateResult>;
-
-  /** Streaming generation; yields incremental text chunks. */
   stream(options: GenerateOptions): AsyncGenerator<string, GenerateResult, unknown>;
-
-  /** Vector embeddings for RAG / knowledge base retrieval. */
   embeddings(input: string[]): Promise<number[][]>;
-
-  /** Whether this provider/model supports image input. */
   supportsVision(model: string): boolean;
-
-  /** Whether this provider/model supports tool calling. */
   supportsToolCalling(model: string): boolean;
 }
 
-/**
- * Resolves the active provider from environment configuration.
- * Server-side only — never import this file from a client component,
- * since concrete implementations read API keys from process.env.
- */
 export function getAIProvider(): AIProvider {
   const providerName = process.env.MERIDIAN_MODEL_PROVIDER;
 
@@ -73,8 +65,7 @@ export function getAIProvider(): AIProvider {
     }
     case 'anthropic':
       throw new Error(
-        'Anthropic provider file was removed from this project. Add lib/ai/providers/anthropic.ts back, ' +
-          'or set MERIDIAN_MODEL_PROVIDER=google in .env.local.'
+        'Anthropic provider file was removed from this project. Set MERIDIAN_MODEL_PROVIDER=google in .env.local.'
       );
     case 'openai':
       throw new Error(
