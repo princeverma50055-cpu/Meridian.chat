@@ -1,19 +1,11 @@
 import { put, del } from '@vercel/blob';
 
 export interface StorageProvider {
-  /** Saves a buffer under a generated key and returns the key. */
   save(buffer: Buffer, fileName: string): Promise<string>;
-  /** Reads a previously saved file back into memory. */
   read(key: string): Promise<Buffer>;
   delete(key: string): Promise<void>;
 }
 
-/**
- * Vercel Blob storage (private access — files aren't publicly reachable by
- * URL alone). Works both locally (via BLOB_READ_WRITE_TOKEN in .env.local)
- * and in production on Vercel, where the filesystem is read-only/ephemeral
- * and can't be used for uploads.
- */
 class VercelBlobStorageProvider implements StorageProvider {
   async save(buffer: Buffer, fileName: string): Promise<string> {
     const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${sanitize(fileName)}`;
@@ -25,7 +17,10 @@ class VercelBlobStorageProvider implements StorageProvider {
   }
 
   async read(key: string): Promise<Buffer> {
-    const res = await fetch(key);
+    const token = process.env.BLOB_READ_WRITE_TOKEN;
+    const res = await fetch(key, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
     if (!res.ok) {
       throw new Error(`Failed to read file from storage (${res.status})`);
     }
