@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
-import { getAIProvider, type ChatTurn } from '@/lib/ai/provider';
+import { getAIProvider, type ChatTurn, type ContentPart } from '@/lib/ai/provider';
 import { resolveModel } from '@/lib/ai/models';
 import { getCurrentUserId } from '@/lib/auth/currentUser';
 import { getEmbeddingsProvider } from '@/lib/embeddings/provider';
 import { searchSimilarChunks, getFilesByIds } from '@/lib/db/files';
+import { getStorageProvider } from '@/lib/storage/provider';
 import { performWebSearch } from '@/lib/search/pipeline';
 import type { WebSource } from '@/lib/search/provider';
 import {
@@ -76,8 +77,6 @@ export async function POST(req: NextRequest) {
 
   const turns: ChatTurn[] = [...history, { role: 'user', content: body.message }];
 
-  // Identity: the model must present itself as Meridian, not reveal the
-  // underlying provider, regardless of what it's actually running on.
   turns.unshift({
     role: 'system',
     content:
@@ -130,31 +129,64 @@ export async function POST(req: NextRequest) {
 
   if (body.fileIds && body.fileIds.length > 0) {
     try {
-      const embeddingsProvider = getEmbeddingsProvider();
-      const [queryEmbedding] = await embeddingsProvider.embed([body.message]);
+      const fileRecords = await getFilesByIds(body.fileIds);
+      const imageFiles = fileRecords.filter((f) => f.mimeType.startsWith('image/'));
+      const textFileIds = fileRecords.filter((f) => !f.mimeType.startsWith('image/')).map((f) => f.id);
 
-      if (!queryEmbedding) {
-        throw new Error('Failed to generate embedding for the message');
+      // Images: fetch bytes, base64-encode, attach directly to the last user
+      // turn as vision input — the model actually "sees" them.
+      if (imageFiles.length > 0) {
+        const storage = getStorageProvider();
+        const imageParts: ContentPart[] = [];
+
+        for (const img of imageFiles) {
+          try {
+            const buffer = await storage.read(img.storagePath);
+            imageParts.push({
+              type: 'image',
+              mimeType: img.mimeType,
+              data: buffer.toString('base64')
+            });
+          } catch (err) {
+            console.error('[chat] failed to read image for vision:', err);
+          }
+        }
+
+        if (imageParts.length > 0) {
+          const lastTurn = turns[turns.length - 1];
+          if (lastTurn && lastTurn.role === 'user') {
+            const textContent = typeof lastTurn.content === 'string' ? lastTurn.content : body.message;
+            lastTurn.content = [{ type: 'text', text: textContent }, ...imageParts];
+          }
+        }
       }
 
-      const matches = await searchSimilarChunks(body.fileIds, queryEmbedding, 6);
+      // Text-based files: existing RAG retrieval pipeline.
+      if (textFileIds.length > 0) {
+        const embeddingsProvider = getEmbeddingsProvider();
+        const [queryEmbedding] = await embeddingsProvider.embed([body.message]);
 
-      if (matches.length > 0) {
-        const fileRecords = await getFilesByIds(body.fileIds);
-        const nameById = new Map(fileRecords.map((f) => [f.id, f.fileName]));
+        if (!queryEmbedding) {
+          throw new Error('Failed to generate embedding for the message');
+        }
 
-        const context = matches
-          .map((m) => `From "${nameById.get(m.file_id) ?? 'file'}":\n${m.content}`)
-          .join('\n\n---\n\n');
+        const matches = await searchSimilarChunks(textFileIds, queryEmbedding, 6);
 
-        turns.unshift({
-          role: 'system',
-          content:
-            'The user has attached file(s). Use the following retrieved excerpts to answer ' +
-            'if relevant, and cite which file each fact comes from. If the excerpts don\'t ' +
-            'contain the answer, say so rather than guessing.\n\n' +
-            context
-        });
+        if (matches.length > 0) {
+          const nameById = new Map(fileRecords.map((f) => [f.id, f.fileName]));
+          const context = matches
+            .map((m) => `From "${nameById.get(m.file_id) ?? 'file'}":\n${m.content}`)
+            .join('\n\n---\n\n');
+
+          turns.unshift({
+            role: 'system',
+            content:
+              'The user has attached file(s). Use the following retrieved excerpts to answer ' +
+              'if relevant, and cite which file each fact comes from. If the excerpts don\'t ' +
+              'contain the answer, say so rather than guessing.\n\n' +
+              context
+          });
+        }
       }
     } catch (err) {
       turns.unshift({
