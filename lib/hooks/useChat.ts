@@ -1,11 +1,10 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import type { ChatMessage, Source } from '@/lib/types/chat';
+import type { Attachment, ChatMessage, Source } from '@/lib/types/chat';
 
 const SOURCES_MARKER = '__SOURCES__';
 
-/** Strips the trailing __SOURCES__ frame so it's never shown as raw text mid-stream. */
 function visibleText(buffer: string): string {
   const idx = buffer.indexOf(SOURCES_MARKER);
   return idx === -1 ? buffer : buffer.slice(0, idx);
@@ -53,7 +52,6 @@ export function useChat(initialConversationId?: string) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const abortRef = useRef<AbortController | null>(null);
-  const lastUserMessageRef = useRef<string>('');
 
   const loadConversation = useCallback(async (id: string) => {
     const res = await fetch(`/api/conversations/${id}`);
@@ -93,8 +91,6 @@ export function useChat(initialConversationId?: string) {
         });
 
         if (res.status === 503) {
-          // Provider/DB not configured yet — fall back to a clearly labeled local demo
-          // so the UI remains testable without credentials.
           await streamDemoFallback(assistantId, setMessages, controller.signal);
           return;
         }
@@ -124,22 +120,18 @@ export function useChat(initialConversationId?: string) {
                 // ignore malformed meta frame
               }
             } else if (newlineIndex === -1) {
-              continue; // wait for the rest of the meta line
+              continue;
             }
           }
 
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: visibleText(buffer) } : m
-            )
+            prev.map((m) => (m.id === assistantId ? { ...m, content: visibleText(buffer) } : m))
           );
         }
 
         const { sources } = extractSourcesFrame(buffer);
         if (sources) {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, sources } : m))
-          );
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, sources } : m)));
         }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
@@ -152,9 +144,7 @@ export function useChat(initialConversationId?: string) {
           );
         }
       } finally {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
-        );
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)));
         setIsGenerating(false);
         abortRef.current = null;
       }
@@ -163,16 +153,22 @@ export function useChat(initialConversationId?: string) {
   );
 
   const sendMessage = useCallback(
-    (text: string, model: string, fileIds?: string[], webSearchEnabled?: boolean) => {
+    (
+      text: string,
+      model: string,
+      fileIds?: string[],
+      webSearchEnabled?: boolean,
+      attachments?: Attachment[]
+    ) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      lastUserMessageRef.current = trimmed;
 
       const userMessage: ChatMessage = {
         id: nextId(),
         role: 'user',
         content: trimmed,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        attachments: attachments && attachments.length > 0 ? attachments : undefined
       };
       const assistantId = nextId();
       const assistantMessage: ChatMessage = {
@@ -210,15 +206,17 @@ export function useChat(initialConversationId?: string) {
     setMessages((prev) => prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)));
   }, []);
 
-  const editMessage = useCallback((messageId: string, newContent: string, model: string, fileIds?: string[], webSearchEnabled?: boolean) => {
-    setMessages((prev) => {
-      const index = prev.findIndex((m) => m.id === messageId);
-      if (index === -1) return prev;
-      const truncated = prev.slice(0, index);
-      return truncated;
-    });
-    sendMessage(newContent, model, fileIds, webSearchEnabled);
-  }, [sendMessage]);
+  const editMessage = useCallback(
+    (messageId: string, newContent: string, model: string, fileIds?: string[], webSearchEnabled?: boolean) => {
+      setMessages((prev) => {
+        const index = prev.findIndex((m) => m.id === messageId);
+        if (index === -1) return prev;
+        return prev.slice(0, index);
+      });
+      sendMessage(newContent, model, fileIds, webSearchEnabled);
+    },
+    [sendMessage]
+  );
 
   return {
     messages,
