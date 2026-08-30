@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Copy, RotateCcw, ThumbsUp, ThumbsDown, Share2, Check, Pencil } from 'lucide-react';
+import { Copy, RotateCcw, ThumbsUp, ThumbsDown, Share2, Check, Pencil, FileText, Image as ImageIcon } from 'lucide-react';
 import { MeridianMark } from '@/components/ui/MeridianMark';
 import { SourceCard } from '@/components/chat/SourceCard';
 import type { ChatMessage as ChatMessageType } from '@/lib/types/chat';
@@ -33,6 +33,24 @@ export function ChatMessageItem({ message, onRegenerate, onEdit }: ChatMessagePr
     return (
       <div className="flex justify-end px-4 py-2">
         <div className="group max-w-[85%] sm:max-w-[70%]">
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
+              {message.attachments.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center gap-1.5 rounded-lg bg-surface-light px-2.5 py-1.5 text-[12px] dark:bg-surface-dark-raised"
+                >
+                  {a.type.startsWith('image/') ? (
+                    <ImageIcon size={13} className="text-cobalt" />
+                  ) : (
+                    <FileText size={13} className="text-cobalt" />
+                  )}
+                  <span className="max-w-[160px] truncate">{a.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {editing ? (
             <div className="rounded-2xl border border-cobalt/40 bg-white p-3 dark:bg-surface-dark-raised">
               <textarea
