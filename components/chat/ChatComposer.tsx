@@ -6,13 +6,15 @@ import { Dropdown, DropdownItem } from '@/components/ui/Dropdown';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ModelSelector } from '@/components/chat/ModelSelector';
 import { cn } from '@/lib/utils/cn';
+import type { Attachment } from '@/lib/types/chat';
 
 type AttachmentStatus = 'uploading' | 'ready' | 'unsupported' | 'error';
 
 interface PendingAttachment {
-  id: string; // temporary client-side id until upload resolves, then the real fileId
+  id: string;
   name: string;
-  sizeLabel: string;
+  mimeType: string;
+  sizeBytes: number;
   status: AttachmentStatus;
   error?: string;
 }
@@ -26,7 +28,7 @@ interface ChatComposerProps {
   model: string;
   onModelChange: (id: string) => void;
   conversationId?: string;
-  onAttachedFileIdsChange: (fileIds: string[]) => void;
+  onAttachedFilesChange: (files: Attachment[]) => void;
   webSearchEnabled: boolean;
   onWebSearchEnabledChange: (enabled: boolean) => void;
 }
@@ -40,7 +42,7 @@ export function ChatComposer({
   model,
   onModelChange,
   conversationId,
-  onAttachedFileIdsChange,
+  onAttachedFilesChange,
   webSearchEnabled,
   onWebSearchEnabledChange
 }: ChatComposerProps) {
@@ -58,8 +60,10 @@ export function ChatComposer({
   }, [value]);
 
   useEffect(() => {
-    const readyIds = attachments.filter((a) => a.status === 'ready').map((a) => a.id);
-    onAttachedFileIdsChange(readyIds);
+    const ready: Attachment[] = attachments
+      .filter((a) => a.status === 'ready')
+      .map((a) => ({ id: a.id, name: a.name, type: a.mimeType, sizeBytes: a.sizeBytes }));
+    onAttachedFilesChange(ready);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments]);
 
@@ -78,7 +82,7 @@ export function ChatComposer({
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       setAttachments((prev) => [
         ...prev,
-        { id: tempId, name: file.name, sizeLabel: formatBytes(file.size), status: 'uploading' }
+        { id: tempId, name: file.name, mimeType: file.type, sizeBytes: file.size, status: 'uploading' }
       ]);
 
       const formData = new FormData();
@@ -101,7 +105,14 @@ export function ChatComposer({
         setAttachments((prev) =>
           prev.map((a) =>
             a.id === tempId
-              ? { ...a, id: data.file.id, status: data.file.status, error: data.note }
+              ? {
+                  ...a,
+                  id: data.file.id,
+                  mimeType: data.file.mimeType,
+                  sizeBytes: data.file.sizeBytes,
+                  status: data.file.status,
+                  error: data.note
+                }
               : a
           )
         );
@@ -111,6 +122,10 @@ export function ChatComposer({
         );
       }
     }
+  }
+
+  function clearAttachmentsAfterSend() {
+    setAttachments([]);
   }
 
   return (
@@ -136,7 +151,6 @@ export function ChatComposer({
                     <FileText size={13} className="text-cobalt" />
                   )}
                   <span className="max-w-[140px] truncate">{a.name}</span>
-                  <span className="text-slate-light">{a.sizeLabel}</span>
                   <button
                     onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
                     aria-label={`Remove ${a.name}`}
@@ -228,7 +242,10 @@ export function ChatComposer({
               </button>
             ) : (
               <button
-                onClick={onSend}
+                onClick={() => {
+                  onSend();
+                  clearAttachmentsAfterSend();
+                }}
                 disabled={!value.trim()}
                 aria-label="Send message"
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-cobalt text-white transition-colors hover:bg-cobalt-dim disabled:bg-slate-border disabled:text-slate-light"
@@ -271,10 +288,4 @@ function ToggleIconButton({
       </button>
     </Tooltip>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
