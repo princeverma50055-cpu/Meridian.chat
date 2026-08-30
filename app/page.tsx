@@ -7,11 +7,12 @@ import { EmptyState } from '@/components/chat/EmptyState';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatComposer } from '@/components/chat/ChatComposer';
 import { useChat } from '@/lib/hooks/useChat';
+import type { Attachment } from '@/lib/types/chat';
 
 export default function ChatPage() {
   const [input, setInput] = useState('');
   const [model, setModel] = useState('meridian-fast');
-  const [fileIds, setFileIds] = useState<string[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<Attachment[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const { messages, isGenerating, sendMessage, regenerate, stop, editMessage, conversationId } =
     useChat();
@@ -22,11 +23,13 @@ export default function ChatPage() {
 
   function handleSend() {
     if (!input.trim() || isGenerating) return;
-    sendMessage(input, model, fileIds, webSearchEnabled);
+    const fileIds = attachedFiles.map((f) => f.id);
+    sendMessage(input, model, fileIds, webSearchEnabled, attachedFiles);
     setInput('');
+    setAttachedFiles([]);
   }
 
-  const title = messages[0]?.content ? messages[0].content.slice(0, 48) : 'New chat';
+  const title = messages.length > 0 ? messages[0].content.slice(0, 48) : 'New chat';
 
   return (
     <AppShell activeConversationId={conversationId}>
@@ -36,8 +39,8 @@ export default function ChatPage() {
       ) : (
         <MessageList
           messages={messages}
-          onRegenerate={(id) => regenerate(id, model, fileIds, webSearchEnabled)}
-          onEdit={(id, content) => editMessage(id, content, model, fileIds, webSearchEnabled)}
+          onRegenerate={(id) => regenerate(id, model)}
+          onEdit={(id, content) => editMessage(id, content, model)}
         />
       )}
       <ChatComposer
@@ -49,7 +52,7 @@ export default function ChatPage() {
         model={model}
         onModelChange={setModel}
         conversationId={conversationId}
-        onAttachedFileIdsChange={setFileIds}
+        onAttachedFilesChange={setAttachedFiles}
         webSearchEnabled={webSearchEnabled}
         onWebSearchEnabledChange={setWebSearchEnabled}
       />
