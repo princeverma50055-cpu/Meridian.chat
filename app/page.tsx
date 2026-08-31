@@ -29,7 +29,8 @@ export default function ChatPage() {
     setAttachedFiles([]);
   }
 
-  const title = messages.length > 0 ? messages[0].content.slice(0, 48) : 'New chat';
+  const firstMessage = messages[0];
+  const title = firstMessage ? firstMessage.content.slice(0, 48) : 'New chat';
 
   return (
     <AppShell activeConversationId={conversationId}>
