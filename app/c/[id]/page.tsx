@@ -33,8 +33,8 @@ export default function ConversationPage() {
     setAttachedFiles([]);
   }
 
-  const title =
-    messages.length > 0 ? messages[0].content.slice(0, 48) : loaded ? 'Conversation' : 'Loading…';
+  const firstMessage = messages[0];
+  const title = firstMessage ? firstMessage.content.slice(0, 48) : loaded ? 'Conversation' : 'Loading…';
 
   return (
     <AppShell activeConversationId={params.id}>
