@@ -8,7 +8,6 @@ import { users } from '@/lib/db/schema';
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt' },
   secret: process.env.AUTH_SECRET,
-  trustHost: true,
   providers: [
     ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
       ? [
@@ -40,7 +39,7 @@ export const authOptions: NextAuthOptions = {
      * persistent user id instead of the dev fallback.
      */
     async signIn({ user }) {
-      if (!user.email) return true; // credentials provider path, not relevant here
+      if (!user.email) return true;
       try {
         const db = getDb();
         const existing = await db.select().from(users).where(eq(users.email, user.email)).limit(1);
@@ -52,8 +51,6 @@ export const authOptions: NextAuthOptions = {
           });
         }
       } catch (err) {
-        // Don't block sign-in over a transient DB hiccup — the jwt callback
-        // will retry the lookup on the next request.
         console.error('[auth] failed to upsert user on sign-in:', err);
       }
       return true;
