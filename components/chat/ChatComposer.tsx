@@ -48,9 +48,11 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
   const [deepResearchOn, setDeepResearchOn] = useState(false);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [recording, setRecording] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(true);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -66,6 +68,62 @@ export function ChatComposer({
     onAttachedFilesChange(ready);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments]);
+
+  useEffect(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceSupported(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-IN';
+
+    let baseValue = '';
+
+    recognition.onstart = () => {
+      baseValue = value;
+    };
+
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      onChange(baseValue ? `${baseValue} ${transcript}` : transcript);
+    };
+
+    recognition.onerror = () => {
+      setRecording(false);
+    };
+
+    recognition.onend = () => {
+      setRecording(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.onresult = null;
+      recognition.onend = null;
+      recognition.onerror = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggleRecording() {
+    if (!recognitionRef.current) return;
+    if (recording) {
+      recognitionRef.current.stop();
+      setRecording(false);
+    } else {
+      recognitionRef.current.start();
+      setRecording(true);
+    }
+  }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -122,10 +180,6 @@ export function ChatComposer({
         );
       }
     }
-  }
-
-  function clearAttachmentsAfterSend() {
-    setAttachments([]);
   }
 
   return (
@@ -219,13 +273,14 @@ export function ChatComposer({
           </div>
 
           <div className="flex items-center gap-1">
-            <Tooltip content={recording ? 'Stop recording' : 'Voice input'}>
+            <Tooltip content={!voiceSupported ? 'Voice input not supported in this browser' : recording ? 'Stop recording' : 'Voice input'}>
               <button
-                onClick={() => setRecording((v) => !v)}
+                onClick={toggleRecording}
+                disabled={!voiceSupported}
                 aria-pressed={recording}
                 className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-lg text-slate hover:bg-surface-light dark:hover:bg-surface-dark',
-                  recording && 'bg-red-500/10 text-red-500'
+                  'flex h-8 w-8 items-center justify-center rounded-lg text-slate hover:bg-surface-light dark:hover:bg-surface-dark disabled:opacity-40',
+                  recording && 'bg-red-500/10 text-red-500 hover:bg-red-500/10'
                 )}
               >
                 <Mic size={16} />
@@ -242,10 +297,7 @@ export function ChatComposer({
               </button>
             ) : (
               <button
-                onClick={() => {
-                  onSend();
-                  clearAttachmentsAfterSend();
-                }}
+                onClick={onSend}
                 disabled={!value.trim()}
                 aria-label="Send message"
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-cobalt text-white transition-colors hover:bg-cobalt-dim disabled:bg-slate-border disabled:text-slate-light"
