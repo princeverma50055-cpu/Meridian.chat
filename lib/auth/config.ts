@@ -8,6 +8,9 @@ import { users } from '@/lib/db/schema';
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt' },
   secret: process.env.AUTH_SECRET,
+  pages: {
+    signIn: '/login'
+  },
   providers: [
     ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
       ? [
@@ -33,11 +36,6 @@ export const authOptions: NextAuthOptions = {
     })
   ],
   callbacks: {
-    /**
-     * On Google sign-in, make sure a row exists in our own `users` table
-     * keyed by email, so conversations/files can be owned by a real,
-     * persistent user id instead of the dev fallback.
-     */
     async signIn({ user }) {
       if (!user.email) return true;
       try {
