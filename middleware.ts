@@ -1,4 +1,6 @@
-export { default } from 'next-auth/middleware';
+import { withAuth } from "next-auth/middleware";
+
+export default withAuth;
 
 /**
  * Every page except /login itself requires a signed-in session. API routes
@@ -6,5 +8,5 @@ export { default } from 'next-auth/middleware';
  * but the UI never reaches them without first passing through this gate.
  */
 export const config = {
-  matcher: ['/', '/c/:path*', '/settings', '/projects', '/agents', '/library']
+  matcher: ['/', '/c/:path*', '/settings', '/projects', '/agents', '/library'],
 };
