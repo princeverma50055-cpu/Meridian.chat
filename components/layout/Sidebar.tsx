@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useSession, signIn, signOut } from 'next-auth/react';
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -11,11 +12,13 @@ import {
   Bot,
   Library,
   Settings,
-  X
+  X,
+  LogIn
 } from 'lucide-react';
 import { MeridianMark } from '@/components/ui/MeridianMark';
 import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { Dropdown, DropdownItem } from '@/components/ui/Dropdown';
 import { cn } from '@/lib/utils/cn';
 
 export interface ConversationSummary {
@@ -37,10 +40,10 @@ export function Sidebar({
   onMobileClose
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { data: session, status } = useSession();
 
   return (
     <>
-      {/* Mobile scrim */}
       {mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-ink/40 backdrop-blur-sm md:hidden"
@@ -56,7 +59,6 @@ export function Sidebar({
           mobileOpen ? 'w-[280px] translate-x-0' : '-translate-x-full md:translate-x-0 md:w-auto'
         )}
       >
-        {/* Header */}
         <div className="safe-top flex items-center justify-between px-3 pt-3">
           <Link href="/" className="flex items-center gap-2 px-1.5 py-2">
             <MeridianMark size={22} />
@@ -82,13 +84,11 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Primary actions */}
         <div className="mt-2 flex flex-col gap-1 px-2">
           <SidebarLink href="/" icon={<Plus size={17} />} label="New chat" collapsed={collapsed} primary />
           <SidebarLink href="/search" icon={<Search size={17} />} label="Search" collapsed={collapsed} />
         </div>
 
-        {/* Sections */}
         <nav className="mt-4 flex-1 overflow-y-auto scrollbar-thin px-2 pb-2">
           {!collapsed && conversations.length > 0 && (
             <SidebarSection label="Recent">
@@ -117,7 +117,6 @@ export function Sidebar({
           </SidebarSection>
         </nav>
 
-        {/* Footer */}
         <div className="safe-bottom border-t border-slate-border px-2 py-2 dark:border-slate-border-dark">
           <SidebarLink
             href="/settings"
@@ -125,21 +124,46 @@ export function Sidebar({
             label="Settings"
             collapsed={collapsed}
           />
-          <Link
-            href="/profile"
-            className={cn(
-              'mt-1 flex items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-slate-border/30',
-              collapsed && 'justify-center'
-            )}
-          >
-            <Avatar name="Prince Verma" size={26} />
-            {!collapsed && (
-              <div className="min-w-0">
-                <p className="truncate text-[13px] font-medium">Prince Verma</p>
-                <p className="truncate text-[11px] text-slate">Free plan</p>
-              </div>
-            )}
-          </Link>
+
+          {status === 'authenticated' && session?.user ? (
+            <Dropdown
+              trigger={
+                <button
+                  className={cn(
+                    'mt-1 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-slate-border/30',
+                    collapsed && 'justify-center'
+                  )}
+                >
+                  <Avatar
+                    name={session.user.name ?? session.user.email ?? 'User'}
+                    imageUrl={session.user.image ?? undefined}
+                    size={26}
+                  />
+                  {!collapsed && (
+                    <div className="min-w-0 text-left">
+                      <p className="truncate text-[13px] font-medium">
+                        {session.user.name ?? session.user.email}
+                      </p>
+                      <p className="truncate text-[11px] text-slate">Signed in</p>
+                    </div>
+                  )}
+                </button>
+              }
+            >
+              <DropdownItem onClick={() => signOut({ callbackUrl: '/' })}>Sign out</DropdownItem>
+            </Dropdown>
+          ) : (
+            <button
+              onClick={() => signIn('google')}
+              className={cn(
+                'mt-1 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-[13px] font-medium text-cobalt hover:bg-cobalt/5',
+                collapsed && 'justify-center'
+              )}
+            >
+              <LogIn size={17} />
+              {!collapsed && <span>Sign in with Google</span>}
+            </button>
+          )}
         </div>
       </aside>
     </>
