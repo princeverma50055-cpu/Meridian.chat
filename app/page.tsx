@@ -14,6 +14,7 @@ export default function ChatPage() {
   const [model, setModel] = useState('meridian-fast');
   const [attachedFiles, setAttachedFiles] = useState<Attachment[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [deepResearchEnabled, setDeepResearchEnabled] = useState(false);
 
   const {
     messages,
@@ -28,7 +29,6 @@ export default function ChatPage() {
   function handleSuggestion(prompt: string) {
     setInput(prompt);
 
-    // Focus the composer after selecting a suggestion.
     requestAnimationFrame(() => {
       const textarea = document.querySelector<HTMLTextAreaElement>(
         'textarea[placeholder="Ask anything..."]'
@@ -39,34 +39,56 @@ export default function ChatPage() {
   }
 
   function handleSend() {
-    const message = input.trim();
+    const text = input.trim();
 
-    if (!message || isGenerating) {
+    if (!text || isGenerating) {
       return;
     }
 
     const fileIds = attachedFiles.map((file) => file.id);
 
     sendMessage(
-      message,
+      text,
       model,
       fileIds,
       webSearchEnabled,
-      attachedFiles
+      attachedFiles,
+      deepResearchEnabled
     );
 
     setInput('');
     setAttachedFiles([]);
   }
 
+  function handleRegenerate(messageId: string) {
+    regenerate(
+      messageId,
+      model,
+      undefined,
+      webSearchEnabled,
+      deepResearchEnabled
+    );
+  }
+
+  function handleEdit(messageId: string, content: string) {
+    editMessage(
+      messageId,
+      content,
+      model,
+      undefined,
+      webSearchEnabled,
+      deepResearchEnabled
+    );
+  }
+
   const firstMessage = messages[0];
 
   const title = firstMessage
-    ? firstMessage.content.slice(0, 48)
+    ? firstMessage.content.slice(0, 48) || 'New chat'
     : 'New chat';
 
   return (
-    <AppShell activeConversationId={conversationId}>
+    <AppShell>
       <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0">
           <ChatHeader title={title} />
@@ -78,10 +100,8 @@ export default function ChatPage() {
           ) : (
             <MessageList
               messages={messages}
-              onRegenerate={(id) => regenerate(id, model)}
-              onEdit={(id, content) =>
-                editMessage(id, content, model)
-              }
+              onRegenerate={handleRegenerate}
+              onEdit={handleEdit}
             />
           )}
         </div>
@@ -99,6 +119,8 @@ export default function ChatPage() {
             onAttachedFilesChange={setAttachedFiles}
             webSearchEnabled={webSearchEnabled}
             onWebSearchEnabledChange={setWebSearchEnabled}
+            deepResearchEnabled={deepResearchEnabled}
+            onDeepResearchEnabledChange={setDeepResearchEnabled}
           />
         </div>
       </div>
