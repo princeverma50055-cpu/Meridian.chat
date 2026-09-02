@@ -1,8 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import {
+  NextRequest,
+  NextResponse
+} from 'next/server';
+
 import {
   getCurrentUserId,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
+
 import {
   getConversationMessages,
   getConversationForUser,
@@ -12,33 +17,13 @@ import {
   revokeShareToken
 } from '@/lib/db/conversations';
 
-export const runtime = 'nodejs';
-
-function jsonError(message: string, status: number) {
-  return NextResponse.json(
-    { error: message },
-    {
-      status,
-      headers: {
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
-      }
-    }
-  );
-}
-
-async function getAuthorizedConversation(
-  id: string,
-  userId: string
-) {
-  if (!id?.trim()) {
-    return null;
-  }
-
-  return getConversationForUser(
-    id.trim(),
-    userId
-  );
+function headers() {
+  return {
+    'Cache-Control':
+      'no-store',
+    'X-Content-Type-Options':
+      'nosniff'
+  };
 }
 
 export async function GET(
@@ -46,71 +31,69 @@ export async function GET(
   {
     params
   }: {
-    params: Promise<{ id: string }>;
+    params: Promise<{
+      id: string;
+    }>;
   }
 ) {
   try {
     const userId =
       await getCurrentUserId();
 
-    const { id } = await params;
+    const { id } =
+      await params;
 
     const conversation =
-      await getAuthorizedConversation(
+      await getConversationForUser(
         id,
         userId
       );
 
     if (!conversation) {
-      return jsonError(
-        'Conversation not found.',
-        404
+      return NextResponse.json(
+        {
+          error:
+            'Conversation not found'
+        },
+        {
+          status: 404,
+          headers: headers()
+        }
       );
     }
 
-    /*
-     * IMPORTANT:
-     * Pass userId here too so messages cannot be
-     * read merely by knowing a conversation ID.
-     */
     const messages =
       await getConversationMessages(
         id,
         userId
       );
 
-    if (!messages) {
-      return jsonError(
-        'Conversation not found.',
-        404
-      );
-    }
-
     return NextResponse.json(
       {
         conversation,
-        messages
+        messages:
+          messages ?? []
       },
       {
-        headers: {
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        }
+        status: 200,
+        headers: headers()
       }
     );
-  } catch (err) {
-    console.error(
-      '[conversation] GET failed:',
-      err
-    );
-
-    return jsonError(
-      err instanceof Error
-        ? err.message
-        : 'Failed to load conversation.',
-      err instanceof UnauthorizedError
-        ? 401
-        : 500
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to load conversation.'
+      },
+      {
+        status:
+          error instanceof UnauthorizedError
+            ? 401
+            : 500,
+        headers: headers()
+      }
     );
   }
 }
@@ -120,108 +103,92 @@ export async function PATCH(
   {
     params
   }: {
-    params: Promise<{ id: string }>;
+    params: Promise<{
+      id: string;
+    }>;
   }
 ) {
   try {
     const userId =
       await getCurrentUserId();
 
-    const { id } = await params;
+    const { id } =
+      await params;
 
-    const conversation =
-      await getAuthorizedConversation(
+    const current =
+      await getConversationForUser(
         id,
         userId
       );
 
-    if (!conversation) {
-      return jsonError(
-        'Conversation not found.',
-        404
+    if (!current) {
+      return NextResponse.json(
+        {
+          error:
+            'Conversation not found'
+        },
+        {
+          status: 404,
+          headers: headers()
+        }
       );
     }
 
-    let body: unknown;
+    const body =
+      await req.json()
+        .catch(() => null);
 
-    try {
-      body = await req.json();
-    } catch {
-      return jsonError(
-        'Invalid JSON request body.',
-        400
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json(
+        {
+          error:
+            'Invalid request body.'
+        },
+        {
+          status: 400,
+          headers: headers()
+        }
       );
     }
 
     if (
-      !body ||
-      typeof body !== 'object'
+      body.share === true
     ) {
-      return jsonError(
-        'Invalid request body.',
-        400
-      );
-    }
-
-    const input =
-      body as Record<string, unknown>;
-
-    /*
-     * Sharing is handled separately because it creates
-     * or revokes a server-generated secret token.
-     */
-    if (input.share === true) {
       const updated =
         await createShareToken(
           userId,
           id
         );
 
-      if (!updated?.length) {
-        return jsonError(
-          'Failed to create share link.',
-          500
-        );
-      }
-
       return NextResponse.json(
         {
           ok: true,
-          conversation: updated[0]
+          conversation: updated
         },
         {
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
+          status: 200,
+          headers: headers()
         }
       );
     }
 
-    if (input.share === false) {
+    if (
+      body.share === false
+    ) {
       const updated =
         await revokeShareToken(
           userId,
           id
         );
 
-      if (!updated?.length) {
-        return jsonError(
-          'Failed to revoke share link.',
-          500
-        );
-      }
-
       return NextResponse.json(
         {
           ok: true,
-          conversation: updated[0]
+          conversation: updated
         },
         {
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
+          status: 200,
+          headers: headers()
         }
       );
     }
@@ -233,84 +200,90 @@ export async function PATCH(
     } = {};
 
     if (
-      Object.prototype.hasOwnProperty.call(
-        input,
-        'title'
-      )
+      body.title !== undefined
     ) {
       if (
-        typeof input.title !== 'string'
+        typeof body.title !==
+          'string' ||
+        !body.title.trim()
       ) {
-        return jsonError(
-          'title must be a string.',
-          400
+        return NextResponse.json(
+          {
+            error:
+              'title is required.'
+          },
+          {
+            status: 400,
+            headers: headers()
+          }
         );
       }
 
-      const title =
-        input.title.trim();
-
-      if (!title) {
-        return jsonError(
-          'title cannot be empty.',
-          400
-        );
-      }
-
-      if (title.length > 120) {
-        return jsonError(
-          'title cannot exceed 120 characters.',
-          400
-        );
-      }
-
-      patch.title = title;
+      patch.title =
+        body.title
+          .trim()
+          .slice(0, 120);
     }
 
     if (
-      Object.prototype.hasOwnProperty.call(
-        input,
-        'pinned'
-      )
+      body.pinned !== undefined
     ) {
       if (
-        typeof input.pinned !== 'boolean'
+        typeof body.pinned !==
+        'boolean'
       ) {
-        return jsonError(
-          'pinned must be a boolean.',
-          400
+        return NextResponse.json(
+          {
+            error:
+              'pinned must be boolean.'
+          },
+          {
+            status: 400,
+            headers: headers()
+          }
         );
       }
 
       patch.pinned =
-        input.pinned;
+        body.pinned;
     }
 
     if (
-      Object.prototype.hasOwnProperty.call(
-        input,
-        'archived'
-      )
+      body.archived !== undefined
     ) {
       if (
-        typeof input.archived !== 'boolean'
+        typeof body.archived !==
+        'boolean'
       ) {
-        return jsonError(
-          'archived must be a boolean.',
-          400
+        return NextResponse.json(
+          {
+            error:
+              'archived must be boolean.'
+          },
+          {
+            status: 400,
+            headers: headers()
+          }
         );
       }
 
       patch.archived =
-        input.archived;
+        body.archived;
     }
 
     if (
-      Object.keys(patch).length === 0
+      Object.keys(patch)
+        .length === 0
     ) {
-      return jsonError(
-        'No valid conversation changes were provided.',
-        400
+      return NextResponse.json(
+        {
+          error:
+            'No supported fields provided.'
+        },
+        {
+          status: 400,
+          headers: headers()
+        }
       );
     }
 
@@ -321,38 +294,31 @@ export async function PATCH(
         patch
       );
 
-    if (!updated?.length) {
-      return jsonError(
-        'Conversation not found.',
-        404
-      );
-    }
-
     return NextResponse.json(
       {
         ok: true,
-        conversation: updated[0]
+        conversation: updated
       },
       {
-        headers: {
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        }
+        status: 200,
+        headers: headers()
       }
     );
-  } catch (err) {
-    console.error(
-      '[conversation] PATCH failed:',
-      err
-    );
-
-    return jsonError(
-      err instanceof Error
-        ? err.message
-        : 'Failed to update conversation.',
-      err instanceof UnauthorizedError
-        ? 401
-        : 500
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to update conversation.'
+      },
+      {
+        status:
+          error instanceof UnauthorizedError
+            ? 401
+            : 500,
+        headers: headers()
+      }
     );
   }
 }
@@ -362,25 +328,34 @@ export async function DELETE(
   {
     params
   }: {
-    params: Promise<{ id: string }>;
+    params: Promise<{
+      id: string;
+    }>;
   }
 ) {
   try {
     const userId =
       await getCurrentUserId();
 
-    const { id } = await params;
+    const { id } =
+      await params;
 
-    const conversation =
-      await getAuthorizedConversation(
+    const current =
+      await getConversationForUser(
         id,
         userId
       );
 
-    if (!conversation) {
-      return jsonError(
-        'Conversation not found.',
-        404
+    if (!current) {
+      return NextResponse.json(
+        {
+          error:
+            'Conversation not found'
+        },
+        {
+          status: 404,
+          headers: headers()
+        }
       );
     }
 
@@ -390,27 +365,29 @@ export async function DELETE(
     );
 
     return NextResponse.json(
-      { ok: true },
       {
-        headers: {
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        }
+        ok: true
+      },
+      {
+        status: 200,
+        headers: headers()
       }
     );
-  } catch (err) {
-    console.error(
-      '[conversation] DELETE failed:',
-      err
-    );
-
-    return jsonError(
-      err instanceof Error
-        ? err.message
-        : 'Failed to delete conversation.',
-      err instanceof UnauthorizedError
-        ? 401
-        : 500
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to delete conversation.'
+      },
+      {
+        status:
+          error instanceof UnauthorizedError
+            ? 401
+            : 500,
+        headers: headers()
+      }
     );
   }
 }
