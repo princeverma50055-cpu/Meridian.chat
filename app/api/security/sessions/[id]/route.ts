@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { and, eq, gt } from 'drizzle-orm';
-import { getServerSession } from 'next-auth';
+import {
+  and,
+  eq
+} from 'drizzle-orm';
 
 import {
-  getCurrentUserId,
+  getCurrentUser,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
-import { authOptions } from '@/lib/auth/config';
+
 import { getDb } from '@/lib/db/client';
 import { authSessions } from '@/lib/db/schema';
 
@@ -23,35 +25,39 @@ export async function DELETE(
   context: RouteContext
 ) {
   try {
-    const userId = await getCurrentUserId();
+    const user =
+      await getCurrentUser();
 
-    const { id } = await context.params;
+    const { id } =
+      await context.params;
 
-    if (!id || !id.trim()) {
+    const sessionId =
+      id?.trim();
+
+    if (!sessionId) {
       return NextResponse.json(
         {
-          error: 'Invalid session ID'
+          error:
+            'Invalid session ID'
         },
         {
           status: 400,
           headers: {
-            'Cache-Control': 'no-store'
+            'Cache-Control':
+              'no-store'
           }
         }
       );
     }
 
-    const session = await getServerSession(authOptions);
-
-    const currentSessionId = (
-      session?.user as
-        | { sessionId?: string }
-        | undefined
-    )?.sessionId;
-
-    // Never allow the current session to be revoked
-    // through this endpoint.
-    if (id === currentSessionId) {
+    /*
+     * Never allow the current session
+     * to be revoked through this endpoint.
+     */
+    if (
+      sessionId ===
+      user.sessionId
+    ) {
       return NextResponse.json(
         {
           error:
@@ -60,7 +66,10 @@ export async function DELETE(
         {
           status: 400,
           headers: {
-            'Cache-Control': 'no-store'
+            'Cache-Control':
+              'no-store',
+            'X-Content-Type-Options':
+              'nosniff'
           }
         }
       );
@@ -68,27 +77,41 @@ export async function DELETE(
 
     const db = getDb();
 
-    const deleted = await db
-      .delete(authSessions)
-      .where(
-        and(
-          eq(authSessions.id, id),
-          eq(authSessions.userId, userId)
+    const deleted =
+      await db
+        .delete(authSessions)
+        .where(
+          and(
+            eq(
+              authSessions.id,
+              sessionId
+            ),
+            eq(
+              authSessions.userId,
+              user.id
+            )
+          )
         )
-      )
-      .returning({
-        id: authSessions.id
-      });
+        .returning({
+          id: authSessions.id
+        });
 
-    if (deleted.length === 0) {
+    const revokedSession =
+      deleted[0];
+
+    if (!revokedSession) {
       return NextResponse.json(
         {
-          error: 'Session not found'
+          error:
+            'Session not found'
         },
         {
           status: 404,
           headers: {
-            'Cache-Control': 'no-store'
+            'Cache-Control':
+              'no-store',
+            'X-Content-Type-Options':
+              'nosniff'
           }
         }
       );
@@ -97,44 +120,53 @@ export async function DELETE(
     return NextResponse.json(
       {
         ok: true,
-        revokedSessionId: deleted[0].id
+        revokedSessionId:
+          revokedSession.id
       },
       {
         status: 200,
         headers: {
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
+          'Cache-Control':
+            'no-store',
+          'X-Content-Type-Options':
+            'nosniff'
         }
       }
     );
   } catch (error) {
-    if (error instanceof UnauthorizedError) {
+    if (
+      error instanceof UnauthorizedError
+    ) {
       return NextResponse.json(
         {
-          error: 'Authentication required'
+          error:
+            'Authentication required'
         },
         {
           status: 401,
           headers: {
-            'Cache-Control': 'no-store'
+            'Cache-Control':
+              'no-store'
           }
         }
       );
     }
 
     console.error(
-      'Session revoke error:',
+      '[sessions] Failed to revoke session:',
       error
     );
 
     return NextResponse.json(
       {
-        error: 'Failed to revoke session'
+        error:
+          'Failed to revoke session'
       },
       {
         status: 500,
         headers: {
-          'Cache-Control': 'no-store'
+          'Cache-Control':
+            'no-store'
         }
       }
     );
