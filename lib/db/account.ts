@@ -1,5 +1,13 @@
-import { eq, and, ilike, or } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  ilike,
+  or,
+  desc
+} from 'drizzle-orm';
+
 import { getDb } from '@/lib/db/client';
+
 import {
   users,
   profiles,
@@ -9,8 +17,27 @@ import {
   memories
 } from '@/lib/db/schema';
 
-export async function getProfile(userId: string) {
+function normalizeUserId(userId: string) {
+  const value = userId?.trim();
+
+  if (!value) {
+    throw new Error('User ID is required.');
+  }
+
+  return value;
+}
+
+/* -------------------------------------------------------------------------- */
+/* PROFILE                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export async function getProfile(
+  userId: string
+) {
   const db = getDb();
+
+  const safeUserId =
+    normalizeUserId(userId);
 
   const [user] = await db
     .select({
@@ -21,7 +48,9 @@ export async function getProfile(userId: string) {
       createdAt: users.createdAt
     })
     .from(users)
-    .where(eq(users.id, userId))
+    .where(
+      eq(users.id, safeUserId)
+    )
     .limit(1);
 
   if (!user) {
@@ -31,15 +60,16 @@ export async function getProfile(userId: string) {
   const [profile] = await db
     .select()
     .from(profiles)
-    .where(eq(profiles.userId, userId))
+    .where(
+      eq(profiles.userId, safeUserId)
+    )
     .limit(1);
 
   return {
     user,
     profile:
-      profile ??
-      {
-        userId,
+      profile ?? {
+        userId: safeUserId,
         plan: 'free',
         preferences: {}
       }
@@ -50,33 +80,58 @@ export async function updateProfile(
   userId: string,
   input: {
     name?: string;
-    preferences?: Record<string, unknown>;
+    preferences?: Record<
+      string,
+      unknown
+    >;
   }
 ) {
   const db = getDb();
 
-  if (input.name !== undefined) {
-    const name = input.name.trim().slice(0, 80);
+  const safeUserId =
+    normalizeUserId(userId);
+
+  if (
+    input.name !== undefined
+  ) {
+    const name =
+      typeof input.name === 'string'
+        ? input.name.trim().slice(0, 80)
+        : '';
 
     await db
       .update(users)
       .set({
         name: name || null
       })
-      .where(eq(users.id, userId));
+      .where(
+        eq(users.id, safeUserId)
+      );
   }
 
-  if (input.preferences !== undefined) {
-    const [current] = await db
-      .select()
-      .from(profiles)
-      .where(eq(profiles.userId, userId))
-      .limit(1);
+  if (
+    input.preferences !== undefined
+  ) {
+    const [current] =
+      await db
+        .select()
+        .from(profiles)
+        .where(
+          eq(
+            profiles.userId,
+            safeUserId
+          )
+        )
+        .limit(1);
 
     const previous =
       current?.preferences &&
-      typeof current.preferences === 'object'
-        ? (current.preferences as Record<string, unknown>)
+      typeof current.preferences ===
+        'object'
+        ? current.preferences as Record<
+            string,
+            unknown
+          >
         : {};
 
     const merged = {
@@ -91,17 +146,30 @@ export async function updateProfile(
           preferences: merged,
           updatedAt: new Date()
         })
-        .where(eq(profiles.userId, userId));
+        .where(
+          eq(
+            profiles.userId,
+            safeUserId
+          )
+        );
     } else {
-      await db.insert(profiles).values({
-        userId,
-        preferences: merged
-      });
+      await db
+        .insert(profiles)
+        .values({
+          userId: safeUserId,
+          preferences: merged
+        });
     }
   }
 
-  return getProfile(userId);
+  return getProfile(
+    safeUserId
+  );
 }
+
+/* -------------------------------------------------------------------------- */
+/* MEMORIES                                                                   */
+/* -------------------------------------------------------------------------- */
 
 export async function addMemory(
   userId: string,
@@ -109,34 +177,93 @@ export async function addMemory(
 ) {
   const db = getDb();
 
-  const normalized = content
-    .trim()
-    .replace(/\s+/g, ' ')
-    .slice(0, 1000);
+  const safeUserId =
+    normalizeUserId(userId);
 
-  if (!normalized) {
-    throw new Error('Memory content cannot be empty.');
+  if (
+    typeof content !== 'string'
+  ) {
+    throw new Error(
+      'Memory content must be a string.'
+    );
   }
 
-  const [row] = await db
-    .insert(memories)
-    .values({
-      userId,
-      content: normalized
-    })
-    .returning();
+  const cleaned =
+    content
+      .replace(/\u0000/g, '')
+      .trim();
+
+  if (!cleaned) {
+    throw new Error(
+      'Memory content is required.'
+    );
+  }
+
+  if (cleaned.length > 1000) {
+    throw new Error(
+      'Memory cannot exceed 1,000 characters.'
+    );
+  }
+
+  /*
+   * Avoid creating the exact same memory
+   * repeatedly for the same account.
+   */
+  const [existing] =
+    await db
+      .select()
+      .from(memories)
+      .where(
+        and(
+          eq(
+            memories.userId,
+            safeUserId
+          ),
+          eq(
+            memories.content,
+            cleaned
+          )
+        )
+      )
+      .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  const [row] =
+    await db
+      .insert(memories)
+      .values({
+        userId: safeUserId,
+        content: cleaned
+      })
+      .returning();
 
   return row;
 }
 
-export async function getMemories(userId: string) {
+export async function getMemories(
+  userId: string
+) {
   const db = getDb();
+
+  const safeUserId =
+    normalizeUserId(userId);
 
   return db
     .select()
     .from(memories)
-    .where(eq(memories.userId, userId))
-    .orderBy(memories.createdAt);
+    .where(
+      eq(
+        memories.userId,
+        safeUserId
+      )
+    )
+    .orderBy(
+      desc(memories.createdAt)
+    )
+    .limit(500);
 }
 
 export async function deleteMemory(
@@ -145,21 +272,31 @@ export async function deleteMemory(
 ) {
   const db = getDb();
 
+  const safeUserId =
+    normalizeUserId(userId);
+
   if (!id?.trim()) {
     return false;
   }
 
-  const deleted = await db
-    .delete(memories)
-    .where(
-      and(
-        eq(memories.id, id),
-        eq(memories.userId, userId)
+  const deleted =
+    await db
+      .delete(memories)
+      .where(
+        and(
+          eq(
+            memories.id,
+            id.trim()
+          ),
+          eq(
+            memories.userId,
+            safeUserId
+          )
+        )
       )
-    )
-    .returning({
-      id: memories.id
-    });
+      .returning({
+        id: memories.id
+      });
 
   return deleted.length > 0;
 }
@@ -169,12 +306,22 @@ export async function deleteAllMemories(
 ) {
   const db = getDb();
 
+  const safeUserId =
+    normalizeUserId(userId);
+
   await db
     .delete(memories)
-    .where(eq(memories.userId, userId));
-
-  return true;
+    .where(
+      eq(
+        memories.userId,
+        safeUserId
+      )
+    );
 }
+
+/* -------------------------------------------------------------------------- */
+/* CHAT SEARCH                                                                */
+/* -------------------------------------------------------------------------- */
 
 export async function searchUserChats(
   userId: string,
@@ -182,83 +329,185 @@ export async function searchUserChats(
 ) {
   const db = getDb();
 
-  const query = q.trim();
+  const safeUserId =
+    normalizeUserId(userId);
+
+  const query =
+    typeof q === 'string'
+      ? q.trim().slice(0, 200)
+      : '';
 
   if (!query) {
     return [];
   }
 
-  const term = `%${query.slice(0, 100)}%`;
+  /*
+   * Escape LIKE wildcard characters so the
+   * user cannot turn the search into an
+   * unrestricted wildcard query.
+   */
+  const escaped =
+    query
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_');
+
+  const term =
+    `%${escaped}%`;
 
   return db
     .select({
       id: conversations.id,
       title: conversations.title,
-      updatedAt: conversations.updatedAt
+      updatedAt:
+        conversations.updatedAt,
+      pinned:
+        conversations.pinned,
+      archived:
+        conversations.archived
     })
     .from(conversations)
     .where(
       and(
-        eq(conversations.userId, userId),
-        ilike(conversations.title, term)
+        eq(
+          conversations.userId,
+          safeUserId
+        ),
+        or(
+          ilike(
+            conversations.title,
+            term
+          )
+        )
       )
     )
-    .orderBy(conversations.updatedAt)
+    .orderBy(
+      desc(
+        conversations.updatedAt
+      )
+    )
     .limit(50);
 }
+
+/* -------------------------------------------------------------------------- */
+/* ACCOUNT EXPORT                                                             */
+/* -------------------------------------------------------------------------- */
 
 export async function exportUserData(
   userId: string
 ) {
   const db = getDb();
 
-  const profile = await getProfile(userId);
+  const safeUserId =
+    normalizeUserId(userId);
+
+  const profile =
+    await getProfile(
+      safeUserId
+    );
 
   if (!profile) {
-    throw new Error('User not found.');
+    throw new Error(
+      'Account not found.'
+    );
   }
 
-  const chats = await db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.userId, userId));
+  const chats =
+    await db
+      .select()
+      .from(conversations)
+      .where(
+        eq(
+          conversations.userId,
+          safeUserId
+        )
+      )
+      .orderBy(
+        desc(
+          conversations.createdAt
+        )
+      );
 
-  const chatIds = chats.map((chat) => chat.id);
+  const chatIds =
+    chats.map(
+      (chat) => chat.id
+    );
 
-  const msgs =
-    chatIds.length > 0
-      ? await db
-          .select()
-          .from(messages)
-          .where(
-            or(
-              ...chatIds.map((id) =>
-                eq(messages.conversationId, id)
-              )
-            )
+  let msgs: typeof messages.$inferSelect[] =
+    [];
+
+  if (chatIds.length > 0) {
+    const conditions =
+      chatIds.map(
+        (id) =>
+          eq(
+            messages.conversationId,
+            id
           )
-      : [];
+      );
 
-  const userFiles = await db
-    .select({
-      id: files.id,
-      fileName: files.fileName,
-      mimeType: files.mimeType,
-      sizeBytes: files.sizeBytes,
-      status: files.status,
-      createdAt: files.createdAt
-    })
-    .from(files)
-    .where(eq(files.userId, userId));
+    msgs =
+      await db
+        .select()
+        .from(messages)
+        .where(
+          or(...conditions)
+        )
+        .orderBy(
+          messages.createdAt
+        );
+  }
 
-  const userMemories = await getMemories(userId);
+  const userFiles =
+    await db
+      .select({
+        id: files.id,
+        fileName:
+          files.fileName,
+        mimeType:
+          files.mimeType,
+        sizeBytes:
+          files.sizeBytes,
+        status:
+          files.status,
+        createdAt:
+          files.createdAt
+      })
+      .from(files)
+      .where(
+        eq(
+          files.userId,
+          safeUserId
+        )
+      )
+      .orderBy(
+        desc(
+          files.createdAt
+        )
+      );
+
+  const mem =
+    await getMemories(
+      safeUserId
+    );
 
   return {
-    exportedAt: new Date().toISOString(),
+    exportVersion: 1,
+    exportedAt:
+      new Date().toISOString(),
+
     profile,
-    conversations: chats,
-    messages: msgs,
-    files: userFiles,
-    memories: userMemories
+
+    conversations:
+      chats,
+
+    messages:
+      msgs,
+
+    files:
+      userFiles,
+
+    memories:
+      mem
   };
 }
