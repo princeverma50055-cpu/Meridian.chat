@@ -1,22 +1,39 @@
 import { NextRequest } from 'next/server';
+
 import {
   getAIProvider,
   type ChatTurn,
   type ContentPart
 } from '@/lib/ai/provider';
+
 import { resolveModel } from '@/lib/ai/models';
+
 import {
   getCurrentUserId,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
-import { getEmbeddingsProvider } from '@/lib/embeddings/provider';
+
+import {
+  getEmbeddingsProvider
+} from '@/lib/embeddings/provider';
+
 import {
   searchSimilarChunks,
   getFilesByIds
 } from '@/lib/db/files';
-import { getStorageProvider } from '@/lib/storage/provider';
-import { performWebSearch } from '@/lib/search/pipeline';
-import type { WebSource } from '@/lib/search/provider';
+
+import {
+  getStorageProvider
+} from '@/lib/storage/provider';
+
+import {
+  performWebSearch
+} from '@/lib/search/pipeline';
+
+import type {
+  WebSource
+} from '@/lib/search/provider';
+
 import {
   addMessage,
   createConversation,
@@ -24,6 +41,14 @@ import {
   getConversationMessages,
   renameConversation
 } from '@/lib/db/conversations';
+
+import {
+  getRequestId
+} from '@/lib/security/request';
+
+import {
+  securityHeaders
+} from '@/lib/security/headers';
 
 export const runtime = 'nodejs';
 
@@ -36,157 +61,219 @@ interface ChatRequestBody {
   deepResearchEnabled?: boolean;
 }
 
-function jsonError(message: string, status: number) {
+const MAX_MESSAGE_LENGTH = 50_000;
+const MAX_FILE_IDS = 20;
+
+function jsonError(
+  message: string,
+  status: number,
+  requestId?: string
+) {
   return new Response(
     JSON.stringify({
-      error: message
+      error: message,
+      requestId
     }),
     {
       status,
       headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
+        'Content-Type':
+          'application/json; charset=utf-8',
+        ...securityHeaders(requestId)
       }
     }
   );
 }
 
-function normalizeFileIds(fileIds: unknown) {
-  if (!Array.isArray(fileIds)) {
+function normalizeFileIds(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) {
     return [];
   }
 
   return [
     ...new Set(
-      fileIds
+      value
         .filter(
           (id): id is string =>
             typeof id === 'string'
         )
-        .map((id) => id.trim())
+        .map((id) =>
+          id.trim()
+        )
         .filter(Boolean)
     )
   ];
 }
 
-export async function POST(req: NextRequest) {
-  let body: ChatRequestBody | null = null;
+export async function POST(
+  req: NextRequest
+) {
+  const requestId =
+    getRequestId(req);
 
-  try {
-    body = (await req.json()) as ChatRequestBody;
-  } catch {
-    return jsonError(
-      'Invalid JSON request body.',
-      400
-    );
-  }
+  /*
+   * ---------------------------------------------------------
+   * 1. Parse and validate request
+   * ---------------------------------------------------------
+   */
+
+  const body =
+    (await req
+      .json()
+      .catch(() => null)) as
+      | ChatRequestBody
+      | null;
 
   if (
     !body ||
-    typeof body.message !== 'string' ||
-    typeof body.model !== 'string'
+    typeof body.message !==
+      'string' ||
+    typeof body.model !==
+      'string'
   ) {
     return jsonError(
       'Expected { message: string, model: string, conversationId?: string }',
-      400
+      400,
+      requestId
     );
   }
 
-  const message = body.message.trim();
+  const message =
+    body.message
+      .replace(/\u0000/g, '')
+      .trim();
 
   if (!message) {
     return jsonError(
       'Message cannot be empty.',
-      400
+      400,
+      requestId
     );
   }
 
-  if (message.length > 50000) {
+  if (
+    message.length >
+    MAX_MESSAGE_LENGTH
+  ) {
     return jsonError(
-      'Message is too long. Maximum length is 50,000 characters.',
-      400
+      `Message is too long. Maximum ${MAX_MESSAGE_LENGTH.toLocaleString()} characters allowed.`,
+      413,
+      requestId
     );
   }
 
-  const model = body.model.trim();
+  const fileIds =
+    normalizeFileIds(
+      body.fileIds
+    );
 
-  if (!model) {
+  if (
+    fileIds.length >
+    MAX_FILE_IDS
+  ) {
     return jsonError(
-      'Model is required.',
-      400
+      `Maximum ${MAX_FILE_IDS} files can be attached to one message.`,
+      400,
+      requestId
     );
   }
 
-  const fileIds = normalizeFileIds(
-    body.fileIds
-  );
+  /*
+   * ---------------------------------------------------------
+   * 2. Authentication
+   * ---------------------------------------------------------
+   */
 
-  if (fileIds.length > 20) {
+  let userId: string;
+
+  try {
+    userId =
+      await getCurrentUserId();
+  } catch (err) {
     return jsonError(
-      'You can attach a maximum of 20 files per message.',
-      400
+      'Authentication required.',
+      err instanceof
+        UnauthorizedError
+        ? 401
+        : 500,
+      requestId
     );
   }
+
+  /*
+   * ---------------------------------------------------------
+   * 3. AI provider + model validation
+   * ---------------------------------------------------------
+   */
 
   let provider;
   let resolvedModel: string;
 
   try {
-    provider = getAIProvider();
-    resolvedModel = resolveModel(model);
+    provider =
+      getAIProvider();
+
+    resolvedModel =
+      resolveModel(
+        body.model
+      );
   } catch (err) {
     return jsonError(
       err instanceof Error
         ? err.message
         : 'AI provider is not configured.',
-      503
+      503,
+      requestId
     );
   }
 
-  let userId: string;
+  /*
+   * ---------------------------------------------------------
+   * 4. Conversation authorization
+   * ---------------------------------------------------------
+   */
+
+  let conversationId =
+    body.conversationId
+      ?.trim();
+
+  let history: ChatTurn[] =
+    [];
+
+  let isNewConversation =
+    false;
 
   try {
-    userId = await getCurrentUserId();
-  } catch (err) {
-    return jsonError(
-      'Authentication required.',
-      err instanceof UnauthorizedError
-        ? 401
-        : 500
-    );
-  }
-
-  let conversationId = body.conversationId?.trim();
-  let history: ChatTurn[] = [];
-  let isNewConversation = false;
-
-  try {
-    /*
-     * Create a new conversation for this authenticated user.
-     */
     if (!conversationId) {
-      const created = await createConversation(
-        userId,
-        deriveTitle(message)
-      );
+      const created =
+        await createConversation(
+          userId,
+          deriveTitle(
+            message
+          )
+        );
 
       if (!created) {
         return jsonError(
           'Failed to create conversation.',
-          500
+          500,
+          requestId
         );
       }
 
-      conversationId = created.id;
-      isNewConversation = true;
+      conversationId =
+        created.id;
+
+      isNewConversation =
+        true;
     } else {
       /*
        * IMPORTANT:
-       * getConversationMessages() now requires userId.
-       *
-       * Therefore a user cannot read another user's conversation simply
-       * by supplying its UUID.
+       * getConversationMessages now requires userId.
+       * This prevents another user's conversation ID
+       * from being accessed.
        */
       const existing =
         await getConversationMessages(
@@ -197,23 +284,32 @@ export async function POST(req: NextRequest) {
       if (!existing) {
         return jsonError(
           'Conversation not found.',
-          404
+          404,
+          requestId
         );
       }
 
-      history = existing.map((m) => ({
-        role: m.role,
-        content: m.content
-      }));
+      history =
+        existing.map(
+          (m) => ({
+            role: m.role,
+            content: m.content
+          })
+        );
     }
 
     if (!conversationId) {
       return jsonError(
         'Failed to resolve conversation.',
-        500
+        500,
+        requestId
       );
     }
 
+    /*
+     * Save user message only after conversation
+     * ownership has been verified.
+     */
     await addMessage(
       conversationId,
       'user',
@@ -222,24 +318,36 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error(
       '[chat] conversation persistence failed:',
-      err
+      {
+        requestId,
+        userId,
+        error: err
+      }
     );
 
     return jsonError(
       err instanceof Error
         ? err.message
-        : 'Failed to persist conversation.',
-      500
+        : 'Failed to persist conversation. Is DATABASE_URL set?',
+      500,
+      requestId
     );
   }
 
-  const turns: ChatTurn[] = [
-    ...history,
-    {
-      role: 'user',
-      content: message
-    }
-  ];
+  /*
+   * ---------------------------------------------------------
+   * 5. Build conversation turns
+   * ---------------------------------------------------------
+   */
+
+  const turns: ChatTurn[] =
+    [
+      ...history,
+      {
+        role: 'user',
+        content: message
+      }
+    ];
 
   turns.unshift({
     role: 'system',
@@ -248,18 +356,24 @@ export async function POST(req: NextRequest) {
       'Meridian. Never mention Google, Gemini, Anthropic, Claude, or any underlying AI provider ' +
       '— that information is private implementation detail, not something to share even if asked ' +
       'directly.\n\n' +
+
       'If asked who made you or who your founder/creator is, say: Meridian was built by ProjectX ' +
       'Hub, and ProjectX Hub was founded by Prince Verma.\n\n' +
+
       'If asked for links or how to contact/connect with the founder or ProjectX Hub, share these:\n' +
       '- Prince Verma\'s LinkedIn: https://www.linkedin.com/in/prince-verma-2b100240a\n' +
       '- ProjectX Hub website: https://projectxhub.in\n\n' +
+
       'Only share these links when relevant to what\'s being asked — don\'t volunteer them ' +
       'unprompted in unrelated conversations.'
   });
 
   /*
-   * User memory
+   * ---------------------------------------------------------
+   * 6. Load user memories
+   * ---------------------------------------------------------
    */
+
   try {
     const {
       getProfile,
@@ -269,44 +383,71 @@ export async function POST(req: NextRequest) {
     );
 
     const profile =
-      await getProfile(userId);
+      await getProfile(
+        userId
+      );
 
-    if (
-      profile?.profile?.preferences &&
+    const preferences =
+      profile?.profile
+        ?.preferences;
+
+    const memoryEnabled =
+      !preferences ||
+      typeof preferences !==
+        'object' ||
       (
-        profile.profile.preferences as {
-          memoryEnabled?: boolean;
-        }
-      ).memoryEnabled !== false
-    ) {
-      const memories =
-        await getMemories(userId);
+        preferences as Record<
+          string,
+          unknown
+        >
+      ).memoryEnabled !==
+        false;
 
-      if (memories.length > 0) {
+    if (memoryEnabled) {
+      const memories =
+        await getMemories(
+          userId
+        );
+
+      if (
+        memories.length >
+        0
+      ) {
         turns.unshift({
           role: 'system',
           content:
             'Relevant user memories. Use these only when helpful and never reveal the memory system itself:\n' +
             memories
               .map(
-                (memory) =>
-                  `- ${memory.content}`
+                (m) =>
+                  `- ${m.content}`
               )
               .join('\n')
         });
       }
     }
   } catch (err) {
+    /*
+     * Memory failure should never prevent normal chat.
+     */
     console.error(
       '[chat] memory load failed:',
-      err
+      {
+        requestId,
+        userId,
+        error: err
+      }
     );
   }
 
   /*
-   * Web search / Deep research
+   * ---------------------------------------------------------
+   * 7. Web search / deep research
+   * ---------------------------------------------------------
    */
-  let webSources: WebSource[] = [];
+
+  let webSources: WebSource[] =
+    [];
 
   if (
     body.webSearchEnabled ||
@@ -318,17 +459,23 @@ export async function POST(req: NextRequest) {
           message,
           provider,
           resolvedModel,
-          body.deepResearchEnabled === true
+          body.deepResearchEnabled ===
+            true
         );
 
-      if (webSources.length > 0) {
-        const context = webSources
-          .map(
-            (source) =>
-              `[${source.id}] ${source.title} (${source.domain})\n` +
-              `${source.snippet}\nURL: ${source.url}`
-          )
-          .join('\n\n');
+      if (
+        webSources.length >
+        0
+      ) {
+        const context =
+          webSources
+            .map(
+              (source) =>
+                `[${source.id}] ${source.title} (${source.domain})\n${source.snippet}\nURL: ${source.url}`
+            )
+            .join(
+              '\n\n'
+            );
 
         turns.unshift({
           role: 'system',
@@ -349,70 +496,86 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       console.error(
         '[chat] web search failed:',
-        err
+        {
+          requestId,
+          userId,
+          error: err
+        }
       );
 
       turns.unshift({
         role: 'system',
         content:
-          'Web search was unavailable for this request. Do not claim that you searched the web ' +
-          'or cite sources that were not actually returned.'
+          `Note: web search failed (${err instanceof Error ? err.message : 'unknown error'}). Tell the user search wasn't available rather than answering as if it succeeded.`
       });
     }
   }
 
   /*
-   * Files / RAG
+   * ---------------------------------------------------------
+   * 8. File authorization + RAG + image vision
+   * ---------------------------------------------------------
    */
-  if (fileIds.length > 0) {
+
+  if (
+    fileIds.length >
+    0
+  ) {
     try {
       /*
-       * IMPORTANT SECURITY CHANGE:
-       *
-       * The database itself now filters by userId.
-       *
-       * We no longer fetch arbitrary file IDs and then perform an
-       * application-side ownership check.
+       * SECURITY:
+       * getFilesByIds now filters by userId at the
+       * database level.
        */
-      const fileRecords =
+      const allFileRecords =
         await getFilesByIds(
           fileIds,
           userId
         );
 
       /*
-       * Every requested file must belong to this user.
+       * A requested file that wasn't returned means
+       * it either doesn't exist or belongs to another user.
        */
+      if (
+        allFileRecords.length !==
+        fileIds.length
+      ) {
+        return jsonError(
+          'One or more files are not accessible to this account.',
+          403,
+          requestId
+        );
+      }
+
+      /*
+       * A file attached to another conversation must not
+       * automatically become usable in this conversation.
+       */
+      const fileRecords =
+        allFileRecords.filter(
+          (file) =>
+            !file.conversationId ||
+            file.conversationId ===
+              conversationId
+        );
+
       if (
         fileRecords.length !==
         fileIds.length
       ) {
         return jsonError(
-          'One or more files are not accessible to this account.',
-          403
+          'One or more files are not accessible from this conversation.',
+          403,
+          requestId
         );
       }
 
       /*
-       * If a file is attached to a specific conversation, it must belong
-       * to the same conversation.
-       *
-       * Files without conversationId remain usable by the owner.
+       * -----------------------------------------------------
+       * Images
+       * -----------------------------------------------------
        */
-      const invalidConversationFile =
-        fileRecords.some(
-          (file) =>
-            file.conversationId &&
-            file.conversationId !==
-              conversationId
-        );
-
-      if (invalidConversationFile) {
-        return jsonError(
-          'One or more files are not attached to this conversation.',
-          403
-        );
-      }
 
       const imageFiles =
         fileRecords.filter(
@@ -422,6 +585,12 @@ export async function POST(req: NextRequest) {
             )
         );
 
+      /*
+       * -----------------------------------------------------
+       * Text files
+       * -----------------------------------------------------
+       */
+
       const textFileIds =
         fileRecords
           .filter(
@@ -430,19 +599,29 @@ export async function POST(req: NextRequest) {
                 'image/'
               )
           )
-          .map((file) => file.id);
+          .map(
+            (file) =>
+              file.id
+          );
 
       /*
-       * Images → vision input
+       * Images are loaded from private storage and passed
+       * directly to the AI provider as vision input.
        */
-      if (imageFiles.length > 0) {
+      if (
+        imageFiles.length >
+        0
+      ) {
         const storage =
           getStorageProvider();
 
-        const imageParts: ContentPart[] =
+        const imageParts:
+          ContentPart[] =
           [];
 
-        for (const image of imageFiles) {
+        for (
+          const image of imageFiles
+        ) {
           try {
             const buffer =
               await storage.read(
@@ -451,26 +630,40 @@ export async function POST(req: NextRequest) {
 
             imageParts.push({
               type: 'image',
-              mimeType: image.mimeType,
-              data: buffer.toString(
-                'base64'
-              )
+              mimeType:
+                image.mimeType,
+              data:
+                buffer.toString(
+                  'base64'
+                )
             });
           } catch (err) {
             console.error(
-              '[chat] failed to read image:',
-              err
+              '[chat] failed to read image for vision:',
+              {
+                requestId,
+                userId,
+                fileId:
+                  image.id,
+                error: err
+              }
             );
           }
         }
 
-        if (imageParts.length > 0) {
+        if (
+          imageParts.length >
+          0
+        ) {
           const lastTurn =
-            turns[turns.length - 1];
+            turns[
+              turns.length - 1
+            ];
 
           if (
             lastTurn &&
-            lastTurn.role === 'user'
+            lastTurn.role ===
+              'user'
           ) {
             const textContent =
               typeof lastTurn.content ===
@@ -490,26 +683,38 @@ export async function POST(req: NextRequest) {
       }
 
       /*
-       * Text files → RAG
+       * -----------------------------------------------------
+       * Text-file RAG
+       * -----------------------------------------------------
        */
-      if (textFileIds.length > 0) {
+
+      if (
+        textFileIds.length >
+        0
+      ) {
         const embeddingsProvider =
           getEmbeddingsProvider();
 
-        const [queryEmbedding] =
-          await embeddingsProvider.embed([
-            message
-          ]);
+        const [
+          queryEmbedding
+        ] =
+          await embeddingsProvider.embed(
+            [message]
+          );
 
-        if (!queryEmbedding) {
+        if (
+          !queryEmbedding
+        ) {
           throw new Error(
             'Failed to generate embedding for the message.'
           );
         }
 
         /*
-         * IMPORTANT:
-         * Pass userId so pgvector retrieval itself is ownership-aware.
+         * SECURITY:
+         * userId is passed into searchSimilarChunks.
+         * This prevents vector search from returning
+         * another user's file chunks.
          */
         const matches =
           await searchSimilarChunks(
@@ -519,7 +724,10 @@ export async function POST(req: NextRequest) {
             userId
           );
 
-        if (matches.length > 0) {
+        if (
+          matches.length >
+          0
+        ) {
           const nameById =
             new Map(
               fileRecords.map(
@@ -553,17 +761,30 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       console.error(
         '[chat] file retrieval failed:',
-        err
+        {
+          requestId,
+          userId,
+          error: err
+        }
       );
 
+      /*
+       * Do not expose internal storage/database
+       * details to the client/model.
+       */
       turns.unshift({
         role: 'system',
         content:
-          'File retrieval was unavailable for this request. Do not claim that you read or analyzed ' +
-          'file contents that were not successfully retrieved.'
+          'Note: file retrieval was unavailable for this request. Answer without file context and clearly mention that the attached-file context could not be loaded.'
       });
     }
   }
+
+  /*
+   * ---------------------------------------------------------
+   * 9. Streaming AI response
+   * ---------------------------------------------------------
+   */
 
   const encoder =
     new TextEncoder();
@@ -573,23 +794,34 @@ export async function POST(req: NextRequest) {
 
   const stream =
     new ReadableStream({
-      async start(controller) {
+      async start(
+        controller
+      ) {
+        /*
+         * Send metadata first.
+         */
         controller.enqueue(
           encoder.encode(
-            `__META__${JSON.stringify({
-              conversationId:
-                finalConversationId
-            })}\n`
+            `__META__${JSON.stringify(
+              {
+                conversationId:
+                  finalConversationId,
+                requestId
+              }
+            )}\n`
           )
         );
 
-        let fullText = '';
+        let fullText =
+          '';
 
         try {
           const generator =
             provider.stream({
-              messages: turns,
-              model: resolvedModel
+              messages:
+                turns,
+              model:
+                resolvedModel
             });
 
           for await (
@@ -598,12 +830,18 @@ export async function POST(req: NextRequest) {
             fullText += chunk;
 
             controller.enqueue(
-              encoder.encode(chunk)
+              encoder.encode(
+                chunk
+              )
             );
           }
 
+          /*
+           * Send web sources after the generated answer.
+           */
           if (
-            webSources.length > 0
+            webSources.length >
+            0
           ) {
             controller.enqueue(
               encoder.encode(
@@ -614,6 +852,9 @@ export async function POST(req: NextRequest) {
             );
           }
 
+          /*
+           * Persist assistant response.
+           */
           await addMessage(
             finalConversationId,
             'assistant',
@@ -622,14 +863,19 @@ export async function POST(req: NextRequest) {
           );
 
           /*
-           * SECURITY:
-           * renameConversation() now requires userId.
+           * The conversation was already created with a title.
+           * Rename again only for compatibility with the
+           * existing application behavior.
            */
-          if (isNewConversation) {
+          if (
+            isNewConversation
+          ) {
             await renameConversation(
               userId,
               finalConversationId,
-              deriveTitle(message)
+              deriveTitle(
+                message
+              )
             );
           }
         } catch (err) {
@@ -638,19 +884,52 @@ export async function POST(req: NextRequest) {
               ? err.message
               : 'Generation failed';
 
+          console.error(
+            '[chat] generation failed:',
+            {
+              requestId,
+              userId,
+              conversationId:
+                finalConversationId,
+              error: err
+            }
+          );
+
+          /*
+           * Never expose provider/internal error details
+           * directly to the client.
+           */
           controller.enqueue(
             encoder.encode(
-              `\n[error] ${errorMessage}`
+              `\n[error] Unable to generate a response. Request ID: ${requestId}`
             )
           );
 
-          if (fullText) {
+          /*
+           * Preserve partial assistant output if generation
+           * failed after some content was streamed.
+           */
+          if (
+            fullText.trim()
+          ) {
             await addMessage(
               finalConversationId,
               'assistant',
               fullText,
               resolvedModel
-            ).catch(() => {});
+            ).catch(
+              (saveError) => {
+                console.error(
+                  '[chat] failed to save partial response:',
+                  {
+                    requestId,
+                    userId,
+                    error:
+                      saveError
+                  }
+                );
+              }
+            );
           }
         } finally {
           controller.close();
@@ -658,13 +937,30 @@ export async function POST(req: NextRequest) {
       }
     });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type':
-        'text/plain; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options':
-        'nosniff'
+  /*
+   * ---------------------------------------------------------
+   * 10. Secure streaming response
+   * ---------------------------------------------------------
+   */
+
+  return new Response(
+    stream,
+    {
+      status: 200,
+      headers: {
+        'Content-Type':
+          'text/plain; charset=utf-8',
+
+        'Cache-Control':
+          'no-cache, no-transform',
+
+        'X-Accel-Buffering':
+          'no',
+
+        ...securityHeaders(
+          requestId
+        )
+      }
     }
-  });
+  );
 }
