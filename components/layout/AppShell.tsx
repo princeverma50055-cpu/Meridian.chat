@@ -1,53 +1,68 @@
 'use client';
 
-import {
-  Menu,
-  X
-} from 'lucide-react';
-
-import {
-  useState,
-  type ReactNode
-} from 'react';
-
+import { Menu, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
+import { SidebarStateProvider, useSidebarState } from '@/components/layout/SidebarContext';
 
 interface AppShellProps {
   children: ReactNode;
+  activeConversationId?: string;
 }
 
 export function AppShell({
-  children
+  children,
+  activeConversationId
 }: AppShellProps) {
-  const [sidebarOpen, setSidebarOpen] =
-    useState(false);
+  return (
+    <SidebarStateProvider>
+      <AppShellInner activeConversationId={activeConversationId}>
+        {children}
+      </AppShellInner>
+    </SidebarStateProvider>
+  );
+}
+
+function AppShellInner({
+  children,
+  activeConversationId
+}: {
+  children: ReactNode;
+  activeConversationId?: string;
+}) {
+  const {
+    mobileOpen,
+    closeMobile,
+    openMobile
+  } = useSidebarState();
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-white text-zinc-950 dark:bg-zinc-950 dark:text-white">
-      <div className="hidden h-full shrink-0 md:block">
-        <Sidebar open={true} />
-      </div>
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-white text-ink dark:bg-ink dark:text-paper">
+      {/* Desktop sidebar */}
+      <aside className="hidden h-full w-[280px] shrink-0 md:block">
+        <Sidebar
+          open={true}
+          activeConversationId={activeConversationId}
+        />
+      </aside>
 
-      {sidebarOpen && (
+      {/* Mobile sidebar */}
+      {mobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
             aria-label="Close sidebar"
-            onClick={() =>
-              setSidebarOpen(false)
-            }
+            onClick={closeMobile}
             className="absolute inset-0 bg-black/50"
           />
 
           <div className="relative z-10 h-full w-[280px]">
-            <div className="absolute right-2 top-3 z-20">
+            <div className="absolute right-2 top-3 z-30">
               <button
                 type="button"
                 aria-label="Close menu"
-                onClick={() =>
-                  setSidebarOpen(false)
-                }
-                className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-zinc-700 shadow-md dark:bg-zinc-900 dark:text-zinc-200"
+                onClick={closeMobile}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-ink shadow-md dark:bg-surface-dark-raised dark:text-paper"
               >
                 <X size={18} />
               </button>
@@ -55,23 +70,21 @@ export function AppShell({
 
             <Sidebar
               open={true}
-              onClose={() =>
-                setSidebarOpen(false)
-              }
+              onClose={closeMobile}
+              activeConversationId={activeConversationId}
             />
           </div>
         </div>
       )}
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex h-14 shrink-0 items-center border-b border-zinc-200 px-3 md:hidden dark:border-zinc-800">
+        {/* Mobile top bar */}
+        <div className="safe-top flex h-14 shrink-0 items-center border-b border-slate-border px-3 dark:border-slate-border-dark md:hidden">
           <button
             type="button"
             aria-label="Open sidebar"
-            onClick={() =>
-              setSidebarOpen(true)
-            }
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            onClick={openMobile}
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-slate transition hover:bg-surface-light dark:hover:bg-surface-dark"
           >
             <Menu size={21} />
           </button>
@@ -83,7 +96,7 @@ export function AppShell({
               </span>
             </div>
 
-            <span className="text-sm font-semibold">
+            <span className="text-sm font-semibold text-ink dark:text-paper">
               Meridian AI
             </span>
           </div>
