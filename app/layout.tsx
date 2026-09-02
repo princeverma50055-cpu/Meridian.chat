@@ -1,7 +1,14 @@
 import type { Metadata, Viewport } from 'next';
-import { Space_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
+import {
+  Space_Grotesk,
+  Inter,
+  JetBrains_Mono
+} from 'next/font/google';
+
 import { ThemeProvider } from '@/components/layout/ThemeProvider';
 import { SessionProviderWrapper } from '@/components/layout/SessionProviderWrapper';
+import { SidebarStateProvider } from '@/components/layout/SidebarContext';
+
 import './globals.css';
 
 const display = Space_Grotesk({
@@ -32,17 +39,33 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#FAFAFA' },
-    { media: '(prefers-color-scheme: dark)', color: '#0A0E17' }
+    {
+      media: '(prefers-color-scheme: light)',
+      color: '#FAFAFA'
+    },
+    {
+      media: '(prefers-color-scheme: dark)',
+      color: '#0A0E17'
+    }
   ]
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${display.variable} ${body.variable} ${mono.variable}`}>
+      <body
+        className={`${display.variable} ${body.variable} ${mono.variable}`}
+      >
         <SessionProviderWrapper>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider>
+            <SidebarStateProvider>
+              {children}
+            </SidebarStateProvider>
+          </ThemeProvider>
         </SessionProviderWrapper>
       </body>
     </html>
