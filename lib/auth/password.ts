@@ -1,38 +1,54 @@
 import {
   randomBytes,
   scryptSync,
-  timingSafeEqual,
+  timingSafeEqual
 } from 'node:crypto';
 
 const KEY_LENGTH = 64;
 const SALT_LENGTH = 16;
 
-export function hashPassword(password: string): string {
+export function hashPassword(
+  password: string
+): string {
   if (!password) {
     throw new Error('Password is required.');
   }
 
-  const salt = randomBytes(SALT_LENGTH).toString('hex');
-  const derivedKey = scryptSync(password, salt, KEY_LENGTH);
+  const salt =
+    randomBytes(SALT_LENGTH).toString('hex');
 
-  return `scrypt$${salt}$${derivedKey.toString('hex')}`;
+  const derivedKey =
+    scryptSync(
+      password,
+      salt,
+      KEY_LENGTH
+    );
+
+  return `scrypt$${salt}$${derivedKey.toString(
+    'hex'
+  )}`;
 }
 
 export function verifyPassword(
   password: string,
-  storedHash: string,
+  storedHash: string
 ): boolean {
   if (!password || !storedHash) {
     return false;
   }
 
-  const parts = storedHash.split('$');
+  const parts =
+    storedHash.split('$');
 
   if (parts.length !== 3) {
     return false;
   }
 
-  const [algorithm, salt, storedKeyHex] = parts;
+  const [
+    algorithm,
+    salt,
+    storedKeyHex
+  ] = parts;
 
   if (
     algorithm !== 'scrypt' ||
@@ -43,18 +59,30 @@ export function verifyPassword(
   }
 
   try {
-    const storedKey = Buffer.from(storedKeyHex, 'hex');
-    const derivedKey = scryptSync(
-      password,
-      salt,
-      KEY_LENGTH,
-    );
+    const storedKey =
+      Buffer.from(
+        storedKeyHex,
+        'hex'
+      );
 
-    if (storedKey.length !== derivedKey.length) {
+    const derivedKey =
+      scryptSync(
+        password,
+        salt,
+        KEY_LENGTH
+      );
+
+    if (
+      storedKey.length !==
+      derivedKey.length
+    ) {
       return false;
     }
 
-    return timingSafeEqual(storedKey, derivedKey);
+    return timingSafeEqual(
+      storedKey,
+      derivedKey
+    );
   } catch {
     return false;
   }
