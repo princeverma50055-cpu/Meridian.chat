@@ -3,9 +3,7 @@
 import {
   useCallback,
   useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction
+  useState
 } from 'react';
 
 import type {
@@ -17,31 +15,40 @@ import type {
 const SOURCES_MARKER =
   '__SOURCES__';
 
+const META_MARKER =
+  '__META__';
+
 function visibleText(
   buffer: string
 ): string {
-  const index =
+  const sourceIndex =
     buffer.indexOf(
       SOURCES_MARKER
     );
 
-  return index === -1
-    ? buffer
-    : buffer.slice(
-        0,
-        index
-      );
+  if (
+    sourceIndex !== -1
+  ) {
+    return buffer.slice(
+      0,
+      sourceIndex
+    );
+  }
+
+  return buffer;
 }
 
 function extractSourcesFrame(
   buffer: string
-): { sources?: Source[] } {
-  const index =
+): {
+  sources?: Source[];
+} {
+  const idx =
     buffer.indexOf(
       SOURCES_MARKER
     );
 
-  if (index === -1) {
+  if (idx === -1) {
     return {};
   }
 
@@ -49,15 +56,64 @@ function extractSourcesFrame(
     const sources =
       JSON.parse(
         buffer.slice(
-          index +
+          idx +
             SOURCES_MARKER.length
         )
       ) as Source[];
 
-    return { sources };
+    return {
+      sources
+    };
   } catch {
     return {};
   }
+}
+
+function getErrorMessage(
+  data: unknown,
+  fallback: string
+): string {
+  if (
+    data &&
+    typeof data === 'object'
+  ) {
+    const record =
+      data as Record<
+        string,
+        unknown
+      >;
+
+    if (
+      typeof record.message ===
+      'string'
+    ) {
+      return record.message;
+    }
+
+    if (
+      typeof record.error ===
+      'string'
+    ) {
+      return record.error;
+    }
+  }
+
+  return fallback;
+}
+
+function notifyConversationChanged() {
+  if (
+    typeof window ===
+    'undefined'
+  ) {
+    return;
+  }
+
+  window.dispatchEvent(
+    new Event(
+      'meridian:conversations-changed'
+    )
+  );
 }
 
 let idCounter = 0;
@@ -66,66 +122,6 @@ function nextId() {
   idCounter += 1;
 
   return `msg-${idCounter}-${Date.now()}`;
-}
-
-const DEMO_FALLBACK_NOTICE =
-  "_Meridian isn't connected to a live model yet, so this is a local demo reply. " +
-  'Set `AI_PROVIDER_KEY` and `DATABASE_URL` in `.env.local` to get real responses — see the README._\n\n' +
-  'Once connected, this same UI streams real tokens from your configured provider, with your ' +
-  'conversation saved to Postgres and picked up again next time you open it.';
-
-async function streamDemoFallback(
-  assistantId: string,
-  setMessages: Dispatch<
-    SetStateAction<ChatMessage[]>
-  >,
-  signal: AbortSignal
-) {
-  const words =
-    DEMO_FALLBACK_NOTICE.split(
-      ' '
-    );
-
-  for (
-    let index = 1;
-    index <= words.length;
-    index += 1
-  ) {
-    if (signal.aborted) {
-      return;
-    }
-
-    await new Promise(
-      (resolve) =>
-        setTimeout(
-          resolve,
-          22
-        )
-    );
-
-    const partial =
-      words
-        .slice(
-          0,
-          index
-        )
-        .join(' ');
-
-    setMessages(
-      (previous) =>
-        previous.map(
-          (message) =>
-            message.id ===
-            assistantId
-              ? {
-                  ...message,
-                  content:
-                    partial
-                }
-              : message
-        )
-    );
-  }
 }
 
 export function useChat(
@@ -150,70 +146,179 @@ export function useChat(
     string | undefined
   >(initialConversationId);
 
+  const [
+    conversationTitle,
+    setConversationTitle
+  ] = useState(
+    'New chat'
+  );
+
+  const [
+    authError,
+    setAuthError
+  ] = useState<
+    string | null
+  >(null);
+
   const abortRef =
     useRef<AbortController | null>(
       null
     );
 
-  /*
-   * ---------------------------------------------------------
-   * Load existing conversation
-   * ---------------------------------------------------------
-   */
+  const mountedRef =
+    useRef(true);
 
+  /*
+   * -------------------------------------------------------
+   * Load existing conversation
+   * -------------------------------------------------------
+   */
   const loadConversation =
     useCallback(
       async (id: string) => {
-        const response =
-          await fetch(
-            `/api/conversations/${id}`
-          );
-
-        if (!response.ok) {
+        if (!id) {
           return;
         }
 
-        const data =
-          await response.json();
+        try {
+          setAuthError(null);
 
-        setConversationId(id);
+          const response =
+            await fetch(
+              `/api/conversations/${id}`,
+              {
+                method: 'GET',
+                cache: 'no-store',
+                credentials:
+                  'include'
+              }
+            );
 
-        setMessages(
-          (
-            data.messages as {
-              id: string;
-              role: string;
-              content: string;
-              createdAt: string;
-            }[]
-          )
-            .filter(
-              (message) =>
-                message.role !==
-                'system'
-            )
-            .map(
-              (message) => ({
-                id: message.id,
-                role:
-                  message.role as ChatMessage['role'],
-                content:
-                  message.content,
+          if (
+            response.status ===
+            401
+          ) {
+            setAuthError(
+              'Your session has expired. Please sign in again.'
+            );
+
+            if (
+              typeof window !==
+              'undefined'
+            ) {
+              window.location.href =
+                '/login';
+            }
+
+            return;
+          }
+
+          if (
+            response.status ===
+            404
+          ) {
+            setMessages([]);
+            setConversationId(
+              undefined
+            );
+            setConversationTitle(
+              'Conversation'
+            );
+            return;
+          }
+
+          if (!response.ok) {
+            throw new Error(
+              'Failed to load conversation.'
+            );
+          }
+
+          const data =
+            (await response.json()) as {
+              conversation?: {
+                id: string;
+                title?: string;
+              };
+              messages?: Array<{
+                id: string;
+                role: string;
+                content: string;
                 createdAt:
-                  message.createdAt
-              })
+                  | string
+                  | Date;
+              }>;
+            };
+
+          if (
+            !mountedRef.current
+          ) {
+            return;
+          }
+
+          setConversationId(
+            data.conversation?.id ||
+              id
+          );
+
+          setConversationTitle(
+            data.conversation?.title?.trim() ||
+              'Conversation'
+          );
+
+          const loadedMessages =
+            Array.isArray(
+              data.messages
             )
-        );
+              ? data.messages
+              : [];
+
+          setMessages(
+            loadedMessages
+              .filter(
+                (message) =>
+                  message.role !==
+                  'system'
+              )
+              .map(
+                (message) => ({
+                  id: message.id,
+                  role:
+                    message.role as ChatMessage['role'],
+                  content:
+                    message.content,
+                  createdAt:
+                    new Date(
+                      message.createdAt
+                    ).toISOString()
+                })
+              )
+          );
+        } catch (error) {
+          console.error(
+            '[chat] Load conversation failed:',
+            error
+          );
+
+          if (
+            mountedRef.current
+          ) {
+            setAuthError(
+              error instanceof
+                Error
+                ? error.message
+                : 'Failed to load conversation.'
+            );
+          }
+        }
       },
       []
     );
 
   /*
-   * ---------------------------------------------------------
-   * Run assistant turn
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
+   * Assistant streaming
+   * -------------------------------------------------------
    */
-
   const runAssistantTurn =
     useCallback(
       async (
@@ -222,7 +327,8 @@ export function useChat(
         model: string,
         fileIds?: string[],
         webSearchEnabled?: boolean,
-        deepResearchEnabled?: boolean
+        deepResearchEnabled?: boolean,
+        targetConversationId?: string
       ) => {
         const controller =
           new AbortController();
@@ -230,23 +336,13 @@ export function useChat(
         abortRef.current =
           controller;
 
-        setIsGenerating(true);
+        setIsGenerating(
+          true
+        );
+
+        setAuthError(null);
 
         try {
-          /*
-           * IMPORTANT:
-           * Deep Research is now sent to the
-           * real backend contract.
-           */
-          const requestBody = {
-            message: userText,
-            model,
-            conversationId,
-            fileIds,
-            webSearchEnabled,
-            deepResearchEnabled
-          };
-
           const response =
             await fetch(
               '/api/chat',
@@ -256,9 +352,18 @@ export function useChat(
                   'Content-Type':
                     'application/json'
                 },
-                body: JSON.stringify(
-                  requestBody
-                ),
+                credentials:
+                  'include',
+                body: JSON.stringify({
+                  message:
+                    userText,
+                  model,
+                  conversationId:
+                    targetConversationId,
+                  fileIds,
+                  webSearchEnabled,
+                  deepResearchEnabled
+                }),
                 signal:
                   controller.signal
               }
@@ -266,44 +371,77 @@ export function useChat(
 
           if (
             response.status ===
-            503
+            401
           ) {
-            await streamDemoFallback(
-              assistantId,
-              setMessages,
-              controller.signal
+            let data:
+              unknown = null;
+
+            try {
+              data =
+                await response.json();
+            } catch {
+              // ignore
+            }
+
+            const message =
+              getErrorMessage(
+                data,
+                'Authentication required. Please sign in again.'
+              );
+
+            setAuthError(
+              message
             );
+
+            setMessages(
+              (previous) =>
+                previous.map(
+                  (item) =>
+                    item.id ===
+                    assistantId
+                      ? {
+                          ...item,
+                          content: `_${message}_`,
+                          isStreaming:
+                            false
+                        }
+                      : item
+                )
+            );
+
+            if (
+              typeof window !==
+              'undefined'
+            ) {
+              window.location.href =
+                '/login';
+            }
 
             return;
           }
 
           if (!response.ok) {
-            let errorMessage =
-              `Request failed with status ${response.status}`;
+            let data:
+              unknown = null;
 
             try {
-              const errorData =
+              data =
                 await response.json();
-
-              if (
-                typeof errorData?.error ===
-                'string'
-              ) {
-                errorMessage =
-                  errorData.error;
-              }
             } catch {
-              // Keep fallback error.
+              // ignore
             }
 
             throw new Error(
-              errorMessage
+              getErrorMessage(
+                data,
+                `Request failed with status ${response.status}.`
+              )
             );
           }
 
           if (!response.body) {
             throw new Error(
-              'No response body'
+              'No response body received.'
             );
           }
 
@@ -317,6 +455,9 @@ export function useChat(
 
           let metaConsumed =
             false;
+
+          let resolvedConversationId =
+            targetConversationId;
 
           while (true) {
             const {
@@ -338,33 +479,37 @@ export function useChat(
               );
 
             /*
-             * -------------------------------------------------
-             * Metadata frame
-             * -------------------------------------------------
+             * The API sends:
+             *
+             * __META__{...}\n
+             * tokens...
+             *
              */
-
-            if (!metaConsumed) {
+            if (
+              !metaConsumed
+            ) {
               const newlineIndex =
                 buffer.indexOf(
                   '\n'
                 );
 
               if (
-                newlineIndex !==
-                  -1 &&
                 buffer.startsWith(
-                  '__META__'
-                )
+                  META_MARKER
+                ) &&
+                newlineIndex !==
+                  -1
               ) {
                 const metaLine =
                   buffer.slice(
-                    '__META__'.length,
+                    META_MARKER.length,
                     newlineIndex
                   );
 
                 buffer =
                   buffer.slice(
-                    newlineIndex + 1
+                    newlineIndex +
+                      1
                   );
 
                 metaConsumed =
@@ -374,91 +519,32 @@ export function useChat(
                   const meta =
                     JSON.parse(
                       metaLine
-                    );
+                    ) as {
+                      conversationId?: string;
+                    };
 
                   if (
                     meta.conversationId
                   ) {
+                    resolvedConversationId =
+                      meta.conversationId;
+
                     setConversationId(
                       meta.conversationId
                     );
                   }
                 } catch {
-                  /*
-                   * Ignore malformed
-                   * metadata frames.
-                   */
+                  console.warn(
+                    '[chat] Invalid metadata frame.'
+                  );
                 }
-              } else if (
-                newlineIndex ===
-                -1
-              ) {
-                continue;
               }
             }
 
-            /*
-             * -------------------------------------------------
-             * Streaming assistant text
-             * -------------------------------------------------
-             */
-
-            setMessages(
-              (previous) =>
-                previous.map(
-                  (message) =>
-                    message.id ===
-                    assistantId
-                      ? {
-                          ...message,
-                          content:
-                            visibleText(
-                              buffer
-                            )
-                        }
-                      : message
-                )
-            );
-          }
-
-          /*
-           * -------------------------------------------------
-           * Sources frame
-           * -------------------------------------------------
-           */
-
-          const {
-            sources
-          } =
-            extractSourcesFrame(
-              buffer
-            );
-
-          if (sources) {
-            setMessages(
-              (previous) =>
-                previous.map(
-                  (message) =>
-                    message.id ===
-                    assistantId
-                      ? {
-                          ...message,
-                          sources
-                        }
-                      : message
-                )
-            );
-          }
-        } catch (error) {
-          if (
-            (error as Error)
-              .name !==
-            'AbortError'
-          ) {
-            const message =
-              error instanceof Error
-                ? error.message
-                : 'Unknown error';
+            const text =
+              visibleText(
+                buffer
+              );
 
             setMessages(
               (previous) =>
@@ -468,57 +554,140 @@ export function useChat(
                     assistantId
                       ? {
                           ...item,
-                          content: `_Something went wrong: ${message}_`
+                          content:
+                            text
                         }
                       : item
                 )
             );
           }
-        } finally {
+
+          const finalSources =
+            extractSourcesFrame(
+              buffer
+            );
+
+          if (
+            finalSources.sources
+          ) {
+            setMessages(
+              (previous) =>
+                previous.map(
+                  (item) =>
+                    item.id ===
+                    assistantId
+                      ? {
+                          ...item,
+                          sources:
+                            finalSources.sources
+                        }
+                      : item
+                )
+            );
+          }
+
+          if (
+            resolvedConversationId
+          ) {
+            setConversationId(
+              resolvedConversationId
+            );
+
+            if (
+              !targetConversationId
+            ) {
+              const firstLine =
+                userText
+                  .trim()
+                  .replace(
+                    /\s+/g,
+                    ' '
+                  );
+
+              setConversationTitle(
+                firstLine.length >
+                  48
+                  ? `${firstLine.slice(
+                      0,
+                      48
+                    )}…`
+                  : firstLine ||
+                      'New chat'
+              );
+            }
+          }
+
+          notifyConversationChanged();
+        } catch (error) {
+          if (
+            error instanceof
+              Error &&
+            error.name ===
+              'AbortError'
+          ) {
+            return;
+          }
+
+          console.error(
+            '[chat] Assistant turn failed:',
+            error
+          );
+
+          const message =
+            error instanceof
+            Error
+              ? error.message
+              : 'Unable to generate a response.';
+
           setMessages(
             (previous) =>
               previous.map(
-                (message) =>
-                  message.id ===
+                (item) =>
+                  item.id ===
                   assistantId
                     ? {
-                        ...message,
-                        isStreaming:
-                          false
+                        ...item,
+                        content: `_Something went wrong: ${message}_`
                       }
-                    : message
+                    : item
               )
           );
+        } finally {
+          if (
+            mountedRef.current
+          ) {
+            setMessages(
+              (previous) =>
+                previous.map(
+                  (item) =>
+                    item.id ===
+                    assistantId
+                      ? {
+                          ...item,
+                          isStreaming:
+                            false
+                        }
+                      : item
+                )
+            );
 
-          setIsGenerating(
-            false
-          );
+            setIsGenerating(
+              false
+            );
+          }
 
           abortRef.current =
             null;
         }
       },
-      [conversationId]
+      []
     );
 
   /*
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
    * Send message
-   * ---------------------------------------------------------
-   *
-   * Signature:
-   *
-   * text
-   * model
-   * fileIds
-   * webSearchEnabled
-   * attachments
-   * deepResearchEnabled
-   *
-   * Keeping attachments before Deep Research
-   * avoids breaking the existing attachment flow.
+   * -------------------------------------------------------
    */
-
   const sendMessage =
     useCallback(
       (
@@ -532,7 +701,10 @@ export function useChat(
         const trimmed =
           text.trim();
 
-        if (!trimmed) {
+        if (
+          !trimmed ||
+          isGenerating
+        ) {
           return;
         }
 
@@ -564,6 +736,9 @@ export function useChat(
             isStreaming: true
           };
 
+        const targetConversationId =
+          conversationId;
+
         setMessages(
           (previous) => [
             ...previous,
@@ -578,18 +753,22 @@ export function useChat(
           model,
           fileIds,
           webSearchEnabled,
-          deepResearchEnabled
+          deepResearchEnabled,
+          targetConversationId
         );
       },
-      [runAssistantTurn]
+      [
+        conversationId,
+        isGenerating,
+        runAssistantTurn
+      ]
     );
 
   /*
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
    * Regenerate
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
    */
-
   const regenerate =
     useCallback(
       (
@@ -599,6 +778,12 @@ export function useChat(
         webSearchEnabled?: boolean,
         deepResearchEnabled?: boolean
       ) => {
+        if (
+          isGenerating
+        ) {
+          return;
+        }
+
         const index =
           messages.findIndex(
             (message) =>
@@ -606,7 +791,9 @@ export function useChat(
               messageId
           );
 
-        if (index === -1) {
+        if (
+          index === -1
+        ) {
           return;
         }
 
@@ -652,21 +839,29 @@ export function useChat(
           model,
           fileIds,
           webSearchEnabled,
-          deepResearchEnabled
+          deepResearchEnabled,
+          conversationId
         );
       },
-      [messages, runAssistantTurn]
+      [
+        conversationId,
+        isGenerating,
+        messages,
+        runAssistantTurn
+      ]
     );
 
   /*
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
    * Stop generation
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
    */
-
   const stop =
     useCallback(() => {
       abortRef.current?.abort();
+
+      abortRef.current =
+        null;
 
       setIsGenerating(
         false
@@ -688,11 +883,10 @@ export function useChat(
     }, []);
 
   /*
-   * ---------------------------------------------------------
-   * Edit message
-   * ---------------------------------------------------------
+   * -------------------------------------------------------
+   * Edit user message
+   * -------------------------------------------------------
    */
-
   const editMessage =
     useCallback(
       (
@@ -706,46 +900,93 @@ export function useChat(
         const trimmed =
           newContent.trim();
 
-        if (!trimmed) {
+        if (
+          !trimmed ||
+          isGenerating
+        ) {
           return;
         }
 
+        const index =
+          messages.findIndex(
+            (message) =>
+              message.id ===
+              messageId
+          );
+
+        if (
+          index === -1
+        ) {
+          return;
+        }
+
+        const newAssistantId =
+          nextId();
+
+        const userMessageId =
+          nextId();
+
+        const editedUserMessage:
+          ChatMessage = {
+            id: userMessageId,
+            role: 'user',
+            content: trimmed,
+            createdAt:
+              new Date().toISOString()
+          };
+
+        const assistantMessage:
+          ChatMessage = {
+            id: newAssistantId,
+            role: 'assistant',
+            content: '',
+            createdAt:
+              new Date().toISOString(),
+            isStreaming: true
+          };
+
         setMessages(
-          (previous) => {
-            const index =
-              previous.findIndex(
-                (message) =>
-                  message.id ===
-                  messageId
-              );
-
-            if (index === -1) {
-              return previous;
-            }
-
-            return previous.slice(
+          (previous) => [
+            ...previous.slice(
               0,
               index
-            );
-          }
+            ),
+            editedUserMessage,
+            assistantMessage
+          ]
         );
 
-        sendMessage(
+        void runAssistantTurn(
           trimmed,
+          newAssistantId,
           model,
           fileIds,
           webSearchEnabled,
-          undefined,
-          deepResearchEnabled
+          deepResearchEnabled,
+          conversationId
         );
       },
-      [sendMessage]
+      [
+        conversationId,
+        isGenerating,
+        messages,
+        runAssistantTurn
+      ]
     );
+
+  /*
+   * Cleanup
+   */
+  useState(() => {
+    return undefined;
+  });
 
   return {
     messages,
     isGenerating,
     conversationId,
+    conversationTitle,
+    authError,
     sendMessage,
     regenerate,
     stop,
