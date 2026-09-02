@@ -1,97 +1,134 @@
 export type SecurityCheck = {
   name: string;
-  status: 'pass' | 'warn' | 'fail';
+  status:
+    | 'pass'
+    | 'warn'
+    | 'fail';
   message: string;
 };
 
-function envExists(name: string): boolean {
-  return Boolean(process.env[name]?.trim());
+function envExists(
+  name: string
+) {
+  return Boolean(
+    process.env[name]?.trim()
+  );
 }
 
-export function runSecurityAudit(): {
-  status: 'healthy' | 'warning' | 'critical';
-  checks: SecurityCheck[];
-  generatedAt: string;
-} {
-  const checks: SecurityCheck[] = [];
+export function runSecurityAudit() {
+  const checks: SecurityCheck[] =
+    [];
+
+  const database =
+    envExists(
+      'DATABASE_URL'
+    );
 
   checks.push({
-    name: 'Database configuration',
-    status: envExists('DATABASE_URL')
+    name:
+      'Database configuration',
+    status: database
       ? 'pass'
       : 'fail',
-    message: envExists('DATABASE_URL')
+    message: database
       ? 'DATABASE_URL is configured.'
       : 'DATABASE_URL is missing.'
   });
 
+  const authSecret =
+    envExists(
+      'AUTH_SECRET'
+    );
+
   checks.push({
-    name: 'Authentication secret',
-    status: envExists('AUTH_SECRET')
+    name:
+      'Authentication secret',
+    status: authSecret
       ? 'pass'
       : 'fail',
-    message: envExists('AUTH_SECRET')
+    message: authSecret
       ? 'AUTH_SECRET is configured.'
       : 'AUTH_SECRET is missing.'
   });
 
-  const googleConfigured =
-    envExists('GOOGLE_CLIENT_ID') &&
-    envExists('GOOGLE_CLIENT_SECRET');
+  const google =
+    envExists(
+      'GOOGLE_CLIENT_ID'
+    ) &&
+    envExists(
+      'GOOGLE_CLIENT_SECRET'
+    );
 
   checks.push({
-    name: 'Google OAuth',
-    status: googleConfigured
+    name:
+      'Google OAuth',
+    status: google
       ? 'pass'
       : 'warn',
-    message: googleConfigured
-      ? 'Google OAuth credentials are configured.'
-      : 'Google OAuth credentials are not configured.'
+    message: google
+      ? 'Google OAuth is configured.'
+      : 'Google OAuth is not configured.'
   });
 
-  checks.push({
-    name: 'Blob storage',
-    status: envExists(
+  const blob =
+    envExists(
       'BLOB_READ_WRITE_TOKEN'
-    )
+    );
+
+  checks.push({
+    name:
+      'Blob storage',
+    status: blob
       ? 'pass'
       : 'warn',
-    message: envExists(
-      'BLOB_READ_WRITE_TOKEN'
-    )
-      ? 'Blob storage token is configured.'
-      : 'Blob storage token is not configured.'
+    message: blob
+      ? 'Blob storage is configured.'
+      : 'Blob storage is not configured.'
   });
+
+  const ai =
+    envExists(
+      'GEMINI_API_KEY'
+    ) ||
+    envExists(
+      'GOOGLE_API_KEY'
+    );
 
   checks.push({
-    name: 'Gemini API',
-    status:
-      envExists('GEMINI_API_KEY') ||
-      envExists('GOOGLE_API_KEY')
-        ? 'pass'
-        : 'warn',
-    message:
-      envExists('GEMINI_API_KEY') ||
-      envExists('GOOGLE_API_KEY')
-        ? 'AI provider credentials detected.'
-        : 'AI provider credentials were not detected.'
+    name:
+      'AI provider',
+    status: ai
+      ? 'pass'
+      : 'warn',
+    message: ai
+      ? 'AI provider credentials detected.'
+      : 'AI provider credentials were not detected.'
   });
 
-  const hasFailure = checks.some(
-    check => check.status === 'fail'
-  );
+  const failure =
+    checks.some(
+      check =>
+        check.status ===
+        'fail'
+    );
 
-  const hasWarning = checks.some(
-    check => check.status === 'warn'
-  );
+  const warning =
+    checks.some(
+      check =>
+        check.status ===
+        'warn'
+    );
 
   return {
-    status: hasFailure
+    status: failure
       ? 'critical'
-      : hasWarning
+      : warning
         ? 'warning'
         : 'healthy',
+
     checks,
-    generatedAt: new Date().toISOString()
+
+    generatedAt:
+      new Date().toISOString()
   };
 }
