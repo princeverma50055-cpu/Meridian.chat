@@ -1,68 +1,97 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSharedConversation } from '@/lib/db/conversations';
 
-type RouteContext = {
-  params: Promise<{ token: string }>;
-};
+export const runtime = 'nodejs';
 
-const SHARE_TOKEN_REGEX = /^[A-Za-z0-9_-]{20,100}$/;
+function jsonError(message: string, status: number) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff'
+      }
+    }
+  );
+}
 
 export async function GET(
   _req: NextRequest,
-  { params }: RouteContext
+  {
+    params
+  }: {
+    params: Promise<{ token: string }>;
+  }
 ) {
   try {
     const { token } = await params;
 
-    if (!token || !SHARE_TOKEN_REGEX.test(token)) {
-      return NextResponse.json(
-        { error: 'Invalid share link' },
-        { status: 400 }
+    const safeToken =
+      typeof token === 'string'
+        ? token.trim()
+        : '';
+
+    /*
+     * Current share tokens are generated using
+     * crypto.randomBytes(...).toString('base64url'),
+     * so they should be sufficiently long.
+     */
+    if (
+      !safeToken ||
+      safeToken.length < 20 ||
+      safeToken.length > 200
+    ) {
+      return jsonError(
+        'Invalid share link.',
+        404
       );
     }
 
-    const data = await getSharedConversation(token);
+    /*
+     * Public endpoint:
+     * No login is required because possessing the
+     * unguessable share token is the authorization.
+     */
+    const data =
+      await getSharedConversation(
+        safeToken
+      );
 
     if (!data) {
-      return NextResponse.json(
-        { error: 'Shared conversation not found' },
-        { status: 404 }
+      return jsonError(
+        'Shared conversation not found or the link has been revoked.',
+        404
       );
     }
 
-    const messages = data.messages
-      .filter((message) => message.role !== 'system')
-      .map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        model: message.model,
-        createdAt: message.createdAt
-      }));
-
+    /*
+     * Do not expose private account information.
+     * Return only the conversation and its messages.
+     */
     return NextResponse.json(
       {
-        conversation: {
-          id: data.conversation.id,
-          title: data.conversation.title,
-          createdAt: data.conversation.createdAt,
-          updatedAt: data.conversation.updatedAt
-        },
-        messages
+        conversation: data.conversation,
+        messages: data.messages
       },
       {
         headers: {
-          'Cache-Control': 'public, max-age=60, s-maxage=60',
-          'X-Content-Type-Options': 'nosniff'
+          'Cache-Control':
+            'private, no-store, max-age=0',
+          'X-Content-Type-Options':
+            'nosniff'
         }
       }
     );
-  } catch (error) {
-    console.error('Shared conversation error:', error);
+  } catch (err) {
+    console.error(
+      '[share] failed:',
+      err
+    );
 
-    return NextResponse.json(
-      { error: 'Failed to load shared conversation' },
-      { status: 500 }
+    return jsonError(
+      'Failed to load shared conversation.',
+      500
     );
   }
 }
