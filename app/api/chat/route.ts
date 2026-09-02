@@ -9,27 +9,18 @@ import {
   getCurrentUserId,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
-import {
-  getEmbeddingsProvider
-} from '@/lib/embeddings/provider';
+import { getEmbeddingsProvider } from '@/lib/embeddings/provider';
 import {
   searchSimilarChunks,
   getFilesByIds
 } from '@/lib/db/files';
-import {
-  getStorageProvider
-} from '@/lib/storage/provider';
-import {
-  performWebSearch
-} from '@/lib/search/pipeline';
-import type {
-  WebSource
-} from '@/lib/search/provider';
+import { getStorageProvider } from '@/lib/storage/provider';
+import { performWebSearch } from '@/lib/search/pipeline';
+import type { WebSource } from '@/lib/search/provider';
 import {
   addMessage,
   createConversation,
   deriveTitle,
-  getConversationForUser,
   getConversationMessages,
   renameConversation
 } from '@/lib/db/conversations';
@@ -45,10 +36,7 @@ interface ChatRequestBody {
   deepResearchEnabled?: boolean;
 }
 
-function jsonError(
-  message: string,
-  status: number
-) {
+function jsonError(message: string, status: number) {
   return new Response(
     JSON.stringify({
       error: message
@@ -56,16 +44,15 @@ function jsonError(
     {
       status,
       headers: {
-        'Content-Type':
-          'application/json'
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff'
       }
     }
   );
 }
 
-function normalizeFileIds(
-  fileIds: unknown
-): string[] {
+function normalizeFileIds(fileIds: unknown) {
   if (!Array.isArray(fileIds)) {
     return [];
   }
@@ -80,25 +67,25 @@ function normalizeFileIds(
         .map((id) => id.trim())
         .filter(Boolean)
     )
-  ].slice(0, 20);
+  ];
 }
 
-export async function POST(
-  req: NextRequest
-) {
-  const body =
-    (await req
-      .json()
-      .catch(() => null)) as
-      | ChatRequestBody
-      | null;
+export async function POST(req: NextRequest) {
+  let body: ChatRequestBody | null = null;
+
+  try {
+    body = (await req.json()) as ChatRequestBody;
+  } catch {
+    return jsonError(
+      'Invalid JSON request body.',
+      400
+    );
+  }
 
   if (
     !body ||
-    typeof body.message !==
-      'string' ||
-    typeof body.model !==
-      'string'
+    typeof body.message !== 'string' ||
+    typeof body.model !== 'string'
   ) {
     return jsonError(
       'Expected { message: string, model: string, conversationId?: string }',
@@ -106,8 +93,7 @@ export async function POST(
     );
   }
 
-  const message =
-    body.message.trim();
+  const message = body.message.trim();
 
   if (!message) {
     return jsonError(
@@ -118,27 +104,37 @@ export async function POST(
 
   if (message.length > 50000) {
     return jsonError(
-      'Message is too long.',
+      'Message is too long. Maximum length is 50,000 characters.',
       400
     );
   }
 
-  const fileIds =
-    normalizeFileIds(
-      body.fileIds
+  const model = body.model.trim();
+
+  if (!model) {
+    return jsonError(
+      'Model is required.',
+      400
     );
+  }
+
+  const fileIds = normalizeFileIds(
+    body.fileIds
+  );
+
+  if (fileIds.length > 20) {
+    return jsonError(
+      'You can attach a maximum of 20 files per message.',
+      400
+    );
+  }
 
   let provider;
   let resolvedModel: string;
 
   try {
-    provider =
-      getAIProvider();
-
-    resolvedModel =
-      resolveModel(
-        body.model
-      );
+    provider = getAIProvider();
+    resolvedModel = resolveModel(model);
   } catch (err) {
     return jsonError(
       err instanceof Error
@@ -151,8 +147,7 @@ export async function POST(
   let userId: string;
 
   try {
-    userId =
-      await getCurrentUserId();
+    userId = await getCurrentUserId();
   } catch (err) {
     return jsonError(
       'Authentication required.',
@@ -162,20 +157,19 @@ export async function POST(
     );
   }
 
-  let conversationId =
-    body.conversationId?.trim();
-
+  let conversationId = body.conversationId?.trim();
   let history: ChatTurn[] = [];
-  let isNewConversation =
-    false;
+  let isNewConversation = false;
 
   try {
+    /*
+     * Create a new conversation for this authenticated user.
+     */
     if (!conversationId) {
-      const created =
-        await createConversation(
-          userId,
-          deriveTitle(message)
-        );
+      const created = await createConversation(
+        userId,
+        deriveTitle(message)
+      );
 
       if (!created) {
         return jsonError(
@@ -184,14 +178,18 @@ export async function POST(
         );
       }
 
-      conversationId =
-        created.id;
-
-      isNewConversation =
-        true;
+      conversationId = created.id;
+      isNewConversation = true;
     } else {
+      /*
+       * IMPORTANT:
+       * getConversationMessages() now requires userId.
+       *
+       * Therefore a user cannot read another user's conversation simply
+       * by supplying its UUID.
+       */
       const existing =
-        await getConversationForUser(
+        await getConversationMessages(
           conversationId,
           userId
         );
@@ -203,26 +201,10 @@ export async function POST(
         );
       }
 
-      const existingMessages =
-        await getConversationMessages(
-          conversationId,
-          userId
-        );
-
-      if (!existingMessages) {
-        return jsonError(
-          'Conversation not found.',
-          404
-        );
-      }
-
-      history =
-        existingMessages.map(
-          (m) => ({
-            role: m.role,
-            content: m.content
-          })
-        );
+      history = existing.map((m) => ({
+        role: m.role,
+        content: m.content
+      }));
     }
 
     if (!conversationId) {
@@ -239,7 +221,7 @@ export async function POST(
     );
   } catch (err) {
     console.error(
-      '[chat] Conversation persistence failed:',
+      '[chat] conversation persistence failed:',
       err
     );
 
@@ -262,14 +244,22 @@ export async function POST(
   turns.unshift({
     role: 'system',
     content:
-      'You are Meridian, an AI assistant built by ProjectX Hub. Always identify yourself as Meridian. Never mention Google, Gemini, Anthropic, Claude, or any underlying AI provider — that information is private implementation detail, not something to share even if asked directly.\n\n' +
-      'If asked who made you or who your founder/creator is, say: Meridian was built by ProjectX Hub, and ProjectX Hub was founded by Prince Verma.\n\n' +
+      'You are Meridian, an AI assistant built by ProjectX Hub. Always identify yourself as ' +
+      'Meridian. Never mention Google, Gemini, Anthropic, Claude, or any underlying AI provider ' +
+      '— that information is private implementation detail, not something to share even if asked ' +
+      'directly.\n\n' +
+      'If asked who made you or who your founder/creator is, say: Meridian was built by ProjectX ' +
+      'Hub, and ProjectX Hub was founded by Prince Verma.\n\n' +
       'If asked for links or how to contact/connect with the founder or ProjectX Hub, share these:\n' +
       '- Prince Verma\'s LinkedIn: https://www.linkedin.com/in/prince-verma-2b100240a\n' +
       '- ProjectX Hub website: https://projectxhub.in\n\n' +
-      'Only share these links when relevant to what\'s being asked — don\'t volunteer them unprompted in unrelated conversations.'
+      'Only share these links when relevant to what\'s being asked — don\'t volunteer them ' +
+      'unprompted in unrelated conversations.'
   });
 
+  /*
+   * User memory
+   */
   try {
     const {
       getProfile,
@@ -279,33 +269,28 @@ export async function POST(
     );
 
     const profile =
-      await getProfile(
-        userId
-      );
+      await getProfile(userId);
 
     if (
-      profile?.profile
-        ?.preferences &&
-      (profile.profile
-        .preferences as {
-        memoryEnabled?: boolean;
-      }).memoryEnabled !==
-        false
+      profile?.profile?.preferences &&
+      (
+        profile.profile.preferences as {
+          memoryEnabled?: boolean;
+        }
+      ).memoryEnabled !== false
     ) {
       const memories =
-        await getMemories(
-          userId
-        );
+        await getMemories(userId);
 
-      if (memories.length) {
+      if (memories.length > 0) {
         turns.unshift({
           role: 'system',
           content:
             'Relevant user memories. Use these only when helpful and never reveal the memory system itself:\n' +
             memories
               .map(
-                (m) =>
-                  `- ${m.content}`
+                (memory) =>
+                  `- ${memory.content}`
               )
               .join('\n')
         });
@@ -313,13 +298,15 @@ export async function POST(
     }
   } catch (err) {
     console.error(
-      '[chat] Memory load failed:',
+      '[chat] memory load failed:',
       err
     );
   }
 
-  let webSources: WebSource[] =
-    [];
+  /*
+   * Web search / Deep research
+   */
+  let webSources: WebSource[] = [];
 
   if (
     body.webSearchEnabled ||
@@ -331,23 +318,25 @@ export async function POST(
           message,
           provider,
           resolvedModel,
-          body.deepResearchEnabled ===
-            true
+          body.deepResearchEnabled === true
         );
 
       if (webSources.length > 0) {
-        const context =
-          webSources
-            .map(
-              (source) =>
-                `[${source.id}] ${source.title} (${source.domain})\n${source.snippet}\nURL: ${source.url}`
-            )
-            .join('\n\n');
+        const context = webSources
+          .map(
+            (source) =>
+              `[${source.id}] ${source.title} (${source.domain})\n` +
+              `${source.snippet}\nURL: ${source.url}`
+          )
+          .join('\n\n');
 
         turns.unshift({
           role: 'system',
           content:
-            'Web search results for the user\'s question are below. Cite sources inline using [1], [2], etc. matching the numbers below. Only cite a source for claims it actually supports — never fabricate a citation or invent a source that isn\'t listed here. If the results don\'t answer the question, say so.\n\n' +
+            'Web search results for the user\'s question are below. Cite sources inline using ' +
+            '[1], [2], etc. matching the numbers below. Only cite a source for claims it actually ' +
+            'supports — never fabricate a citation or invent a source that isn\'t listed here. If ' +
+            'the results don\'t answer the question, say so.\n\n' +
             context
         });
       } else {
@@ -359,43 +348,68 @@ export async function POST(
       }
     } catch (err) {
       console.error(
-        '[chat] Web search failed:',
+        '[chat] web search failed:',
         err
       );
 
       turns.unshift({
         role: 'system',
         content:
-          'Web search was unavailable for this request. Do not pretend that web search succeeded.'
+          'Web search was unavailable for this request. Do not claim that you searched the web ' +
+          'or cite sources that were not actually returned.'
       });
     }
   }
 
+  /*
+   * Files / RAG
+   */
   if (fileIds.length > 0) {
     try {
-      const allFileRecords =
-        await getFilesByIds(
-          fileIds
-        );
-
+      /*
+       * IMPORTANT SECURITY CHANGE:
+       *
+       * The database itself now filters by userId.
+       *
+       * We no longer fetch arbitrary file IDs and then perform an
+       * application-side ownership check.
+       */
       const fileRecords =
-        allFileRecords.filter(
-          (file) =>
-            file.userId ===
-              userId &&
-            (
-              !file.conversationId ||
-              file.conversationId ===
-                conversationId
-            )
+        await getFilesByIds(
+          fileIds,
+          userId
         );
 
+      /*
+       * Every requested file must belong to this user.
+       */
       if (
         fileRecords.length !==
         fileIds.length
       ) {
         return jsonError(
           'One or more files are not accessible to this account.',
+          403
+        );
+      }
+
+      /*
+       * If a file is attached to a specific conversation, it must belong
+       * to the same conversation.
+       *
+       * Files without conversationId remain usable by the owner.
+       */
+      const invalidConversationFile =
+        fileRecords.some(
+          (file) =>
+            file.conversationId &&
+            file.conversationId !==
+              conversationId
+        );
+
+      if (invalidConversationFile) {
+        return jsonError(
+          'One or more files are not attached to this conversation.',
           403
         );
       }
@@ -416,57 +430,47 @@ export async function POST(
                 'image/'
               )
           )
-          .map(
-            (file) => file.id
-          );
+          .map((file) => file.id);
 
-      if (
-        imageFiles.length > 0
-      ) {
+      /*
+       * Images → vision input
+       */
+      if (imageFiles.length > 0) {
         const storage =
           getStorageProvider();
 
-        const imageParts:
-          ContentPart[] = [];
+        const imageParts: ContentPart[] =
+          [];
 
-        for (
-          const imageFile of imageFiles
-        ) {
+        for (const image of imageFiles) {
           try {
             const buffer =
               await storage.read(
-                imageFile.storagePath
+                image.storagePath
               );
 
             imageParts.push({
               type: 'image',
-              mimeType:
-                imageFile.mimeType,
+              mimeType: image.mimeType,
               data: buffer.toString(
                 'base64'
               )
             });
           } catch (err) {
             console.error(
-              '[chat] Failed to read image:',
+              '[chat] failed to read image:',
               err
             );
           }
         }
 
-        if (
-          imageParts.length >
-          0
-        ) {
+        if (imageParts.length > 0) {
           const lastTurn =
-            turns[
-              turns.length - 1
-            ];
+            turns[turns.length - 1];
 
           if (
             lastTurn &&
-            lastTurn.role ===
-              'user'
+            lastTurn.role === 'user'
           ) {
             const textContent =
               typeof lastTurn.content ===
@@ -485,18 +489,17 @@ export async function POST(
         }
       }
 
-      if (
-        textFileIds.length > 0
-      ) {
+      /*
+       * Text files → RAG
+       */
+      if (textFileIds.length > 0) {
         const embeddingsProvider =
           getEmbeddingsProvider();
 
-        const [
-          queryEmbedding
-        ] =
-          await embeddingsProvider.embed(
-            [message]
-          );
+        const [queryEmbedding] =
+          await embeddingsProvider.embed([
+            message
+          ]);
 
         if (!queryEmbedding) {
           throw new Error(
@@ -504,11 +507,16 @@ export async function POST(
           );
         }
 
+        /*
+         * IMPORTANT:
+         * Pass userId so pgvector retrieval itself is ownership-aware.
+         */
         const matches =
           await searchSimilarChunks(
             textFileIds,
             queryEmbedding,
-            6
+            6,
+            userId
           );
 
         if (matches.length > 0) {
@@ -535,21 +543,24 @@ export async function POST(
           turns.unshift({
             role: 'system',
             content:
-              'The user has attached file(s). Use the following retrieved excerpts to answer if relevant, and cite which file each fact comes from. If the excerpts don\'t contain the answer, say so rather than guessing.\n\n' +
+              'The user has attached file(s). Use the following retrieved excerpts to answer ' +
+              'if relevant, and cite which file each fact comes from. If the excerpts don\'t ' +
+              'contain the answer, say so rather than guessing.\n\n' +
               context
           });
         }
       }
     } catch (err) {
       console.error(
-        '[chat] File retrieval failed:',
+        '[chat] file retrieval failed:',
         err
       );
 
       turns.unshift({
         role: 'system',
         content:
-          'File retrieval was unavailable for this request. Answer without file context and clearly mention that file context could not be accessed.'
+          'File retrieval was unavailable for this request. Do not claim that you read or analyzed ' +
+          'file contents that were not successfully retrieved.'
       });
     }
   }
@@ -562,9 +573,7 @@ export async function POST(
 
   const stream =
     new ReadableStream({
-      async start(
-        controller
-      ) {
+      async start(controller) {
         controller.enqueue(
           encoder.encode(
             `__META__${JSON.stringify({
@@ -580,8 +589,7 @@ export async function POST(
           const generator =
             provider.stream({
               messages: turns,
-              model:
-                resolvedModel
+              model: resolvedModel
             });
 
           for await (
@@ -590,9 +598,7 @@ export async function POST(
             fullText += chunk;
 
             controller.enqueue(
-              encoder.encode(
-                chunk
-              )
+              encoder.encode(chunk)
             );
           }
 
@@ -615,23 +621,18 @@ export async function POST(
             resolvedModel
           );
 
-          if (
-            isNewConversation
-          ) {
+          /*
+           * SECURITY:
+           * renameConversation() now requires userId.
+           */
+          if (isNewConversation) {
             await renameConversation(
               userId,
               finalConversationId,
-              deriveTitle(
-                message
-              )
+              deriveTitle(message)
             );
           }
         } catch (err) {
-          console.error(
-            '[chat] Generation failed:',
-            err
-          );
-
           const errorMessage =
             err instanceof Error
               ? err.message
@@ -649,9 +650,7 @@ export async function POST(
               'assistant',
               fullText,
               resolvedModel
-            ).catch(
-              () => {}
-            );
+            ).catch(() => {});
           }
         } finally {
           controller.close();
@@ -659,16 +658,13 @@ export async function POST(
       }
     });
 
-  return new Response(
-    stream,
-    {
-      headers: {
-        'Content-Type':
-          'text/plain; charset=utf-8',
-        'Cache-Control':
-          'no-cache, no-transform',
-        Connection: 'keep-alive'
-      }
+  return new Response(stream, {
+    headers: {
+      'Content-Type':
+        'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options':
+        'nosniff'
     }
-  );
+  });
 }
