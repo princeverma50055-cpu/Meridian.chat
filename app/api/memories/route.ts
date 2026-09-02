@@ -1,5 +1,3 @@
-"app/api/memories/route.ts"
-
 import { NextRequest, NextResponse } from 'next/server';
 import { desc, eq } from 'drizzle-orm';
 
