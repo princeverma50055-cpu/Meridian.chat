@@ -1,39 +1,68 @@
-import { randomUUID } from 'node:crypto';
+import {
+  randomUUID
+} from 'node:crypto';
 
-export function getRequestId(request: Request): string {
-  const existing = request.headers.get('x-request-id')?.trim();
+export function getRequestId(
+  request: Request
+) {
+  const existing =
+    request.headers
+      .get('x-request-id')
+      ?.trim();
 
-  if (existing && /^[a-zA-Z0-9._:-]{1,100}$/.test(existing)) {
+  if (
+    existing &&
+    /^[a-zA-Z0-9._:-]{1,100}$/.test(
+      existing
+    )
+  ) {
     return existing;
   }
 
   return randomUUID();
 }
 
-export function getClientIp(request: Request): string {
-  const forwardedFor = request.headers.get('x-forwarded-for');
+export function getClientIp(
+  request: Request
+) {
+  const forwarded =
+    request.headers
+      .get('x-forwarded-for');
 
-  if (forwardedFor) {
-    const first = forwardedFor
-      .split(',')
-      .map(value => value.trim())
-      .find(Boolean);
+  if (forwarded) {
+    const first =
+      forwarded
+        .split(',')
+        .map(
+          value =>
+            value.trim()
+        )
+        .find(Boolean);
 
-    if (first) return first.slice(0, 100);
+    if (first) {
+      return first.slice(
+        0,
+        100
+      );
+    }
   }
 
-  const realIp = request.headers.get('x-real-ip')?.trim();
-
-  if (realIp) {
-    return realIp.slice(0, 100);
-  }
-
-  return 'unknown';
+  return (
+    request.headers
+      .get('x-real-ip')
+      ?.trim()
+      .slice(0, 100) ||
+    'unknown'
+  );
 }
 
-export function getUserAgent(request: Request): string {
+export function getUserAgent(
+  request: Request
+) {
   return (
-    request.headers.get('user-agent')?.slice(0, 500) ||
+    request.headers
+      .get('user-agent')
+      ?.slice(0, 500) ||
     'unknown'
   );
 }
