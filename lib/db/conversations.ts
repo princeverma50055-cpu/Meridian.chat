@@ -1,16 +1,55 @@
-import { and, desc, eq } from 'drizzle-orm';
-import { randomBytes } from 'node:crypto';
+import {
+  eq,
+  desc,
+  and
+} from 'drizzle-orm';
+
 import {
   getDb
 } from '@/lib/db/client';
+
 import {
   conversations,
   messages,
   messageRoleEnum
 } from '@/lib/db/schema';
 
+import {
+  randomBytes
+} from 'node:crypto';
+
 type MessageRole =
   (typeof messageRoleEnum.enumValues)[number];
+
+function cleanUserId(
+  userId: string
+) {
+  const value =
+    userId?.trim();
+
+  if (!value) {
+    throw new Error(
+      'User ID is required.'
+    );
+  }
+
+  return value;
+}
+
+function cleanConversationId(
+  conversationId: string
+) {
+  const value =
+    conversationId?.trim();
+
+  if (!value) {
+    throw new Error(
+      'Conversation ID is required.'
+    );
+  }
+
+  return value;
+}
 
 export async function listConversations(
   userId: string
@@ -28,8 +67,14 @@ export async function listConversations(
     .from(conversations)
     .where(
       and(
-        eq(conversations.userId, userId),
-        eq(conversations.archived, false)
+        eq(
+          conversations.userId,
+          cleanUserId(userId)
+        ),
+        eq(
+          conversations.archived,
+          false
+        )
       )
     )
     .orderBy(
@@ -45,13 +90,21 @@ export async function createConversation(
 ) {
   const db = getDb();
 
-  const [row] = await db
-    .insert(conversations)
-    .values({
-      userId,
-      title
-    })
-    .returning();
+  const cleanTitle =
+    title
+      .trim()
+      .slice(0, 120) ||
+    'New chat';
+
+  const [row] =
+    await db
+      .insert(conversations)
+      .values({
+        userId:
+          cleanUserId(userId),
+        title: cleanTitle
+      })
+      .returning();
 
   return row;
 }
@@ -60,51 +113,54 @@ export async function getConversationForUser(
   conversationId: string,
   userId: string
 ) {
-  if (!conversationId || !userId) {
-    return null;
-  }
-
   const db = getDb();
 
-  const [row] = await db
-    .select()
-    .from(conversations)
-    .where(
-      and(
-        eq(
-          conversations.id,
-          conversationId
-        ),
-        eq(
-          conversations.userId,
-          userId
+  const [row] =
+    await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(
+            conversations.id,
+            cleanConversationId(
+              conversationId
+            )
+          ),
+          eq(
+            conversations.userId,
+            cleanUserId(userId)
+          )
         )
       )
-    )
-    .limit(1);
+      .limit(1);
 
-  return row ?? null;
+  return row;
 }
 
 export async function getConversationMessages(
   conversationId: string,
   userId: string
 ) {
-  if (!conversationId || !userId) {
-    return null;
-  }
+  const db = getDb();
+
+  const id =
+    cleanConversationId(
+      conversationId
+    );
+
+  const owner =
+    cleanUserId(userId);
 
   const conversation =
     await getConversationForUser(
-      conversationId,
-      userId
+      id,
+      owner
     );
 
   if (!conversation) {
     return null;
   }
-
-  const db = getDb();
 
   return db
     .select()
@@ -112,10 +168,12 @@ export async function getConversationMessages(
     .where(
       eq(
         messages.conversationId,
-        conversationId
+        id
       )
     )
-    .orderBy(messages.createdAt);
+    .orderBy(
+      messages.createdAt
+    );
 }
 
 export async function addMessage(
@@ -124,29 +182,23 @@ export async function addMessage(
   content: string,
   model?: string
 ) {
-  if (!conversationId) {
-    throw new Error(
-      'Conversation ID is required.'
-    );
-  }
-
-  if (!content.trim()) {
-    throw new Error(
-      'Message content cannot be empty.'
-    );
-  }
-
   const db = getDb();
 
-  const [row] = await db
-    .insert(messages)
-    .values({
-      conversationId,
-      role,
-      content,
-      model
-    })
-    .returning();
+  const id =
+    cleanConversationId(
+      conversationId
+    );
+
+  const [row] =
+    await db
+      .insert(messages)
+      .values({
+        conversationId: id,
+        role,
+        content,
+        model
+      })
+      .returning();
 
   await db
     .update(conversations)
@@ -156,7 +208,7 @@ export async function addMessage(
     .where(
       eq(
         conversations.id,
-        conversationId
+        id
       )
     );
 
@@ -173,33 +225,46 @@ export async function updateConversation(
     shareToken?: string | null;
   }
 ) {
-  if (!userId || !conversationId) {
-    return null;
-  }
-
   const db = getDb();
 
-  const [row] = await db
-    .update(conversations)
-    .set({
-      ...patch,
-      updatedAt: new Date()
-    })
-    .where(
-      and(
-        eq(
-          conversations.id,
-          conversationId
-        ),
-        eq(
-          conversations.userId,
-          userId
+  const safePatch = {
+    ...patch
+  };
+
+  if (
+    safePatch.title !==
+    undefined
+  ) {
+    safePatch.title =
+      safePatch.title
+        .trim()
+        .slice(0, 120);
+  }
+
+  const [row] =
+    await db
+      .update(conversations)
+      .set({
+        ...safePatch,
+        updatedAt: new Date()
+      })
+      .where(
+        and(
+          eq(
+            conversations.id,
+            cleanConversationId(
+              conversationId
+            )
+          ),
+          eq(
+            conversations.userId,
+            cleanUserId(userId)
+          )
         )
       )
-    )
-    .returning();
+      .returning();
 
-  return row ?? null;
+  return row;
 }
 
 export async function renameConversation(
@@ -207,18 +272,11 @@ export async function renameConversation(
   conversationId: string,
   title: string
 ) {
-  const cleanTitle =
-    title.trim();
-
-  if (!cleanTitle) {
-    return null;
-  }
-
   return updateConversation(
     userId,
     conversationId,
     {
-      title: cleanTitle
+      title
     }
   );
 }
@@ -227,41 +285,29 @@ export async function deleteConversation(
   userId: string,
   conversationId: string
 ) {
-  if (!userId || !conversationId) {
-    return false;
-  }
-
   const db = getDb();
 
-  const deleted =
-    await db
-      .delete(conversations)
-      .where(
-        and(
-          eq(
-            conversations.id,
+  await db
+    .delete(conversations)
+    .where(
+      and(
+        eq(
+          conversations.id,
+          cleanConversationId(
             conversationId
-          ),
-          eq(
-            conversations.userId,
-            userId
           )
+        ),
+        eq(
+          conversations.userId,
+          cleanUserId(userId)
         )
       )
-      .returning({
-        id: conversations.id
-      });
-
-  return deleted.length > 0;
+    );
 }
 
 export async function deleteAllConversations(
   userId: string
 ) {
-  if (!userId) {
-    return;
-  }
-
   const db = getDb();
 
   await db
@@ -269,7 +315,7 @@ export async function deleteAllConversations(
     .where(
       eq(
         conversations.userId,
-        userId
+        cleanUserId(userId)
       )
     );
 }
@@ -279,9 +325,8 @@ export async function createShareToken(
   conversationId: string
 ) {
   const token =
-    randomBytes(32).toString(
-      'base64url'
-    );
+    randomBytes(32)
+      .toString('base64url');
 
   return updateConversation(
     userId,
@@ -308,14 +353,18 @@ export async function revokeShareToken(
 export async function getSharedConversation(
   token: string
 ) {
-  const cleanToken =
-    token.trim();
+  const db = getDb();
 
-  if (!cleanToken) {
+  const safeToken =
+    token?.trim();
+
+  if (
+    !safeToken ||
+    safeToken.length < 20 ||
+    safeToken.length > 200
+  ) {
     return null;
   }
-
-  const db = getDb();
 
   const [conversation] =
     await db
@@ -324,7 +373,7 @@ export async function getSharedConversation(
       .where(
         eq(
           conversations.shareToken,
-          cleanToken
+          safeToken
         )
       )
       .limit(1);
@@ -343,7 +392,9 @@ export async function getSharedConversation(
           conversation.id
         )
       )
-      .orderBy(messages.createdAt);
+      .orderBy(
+        messages.createdAt
+      );
 
   return {
     conversation,
@@ -353,7 +404,7 @@ export async function getSharedConversation(
 
 export function deriveTitle(
   firstUserMessage: string
-): string {
+) {
   const trimmed =
     firstUserMessage
       .trim()
@@ -361,5 +412,6 @@ export function deriveTitle(
 
   return trimmed.length > 48
     ? `${trimmed.slice(0, 48)}…`
-    : trimmed || 'New chat';
+    : trimmed ||
+        'New chat';
 }
