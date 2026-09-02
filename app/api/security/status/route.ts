@@ -1,4 +1,6 @@
-import { NextResponse } from 'next/server';
+import {
+  NextResponse
+} from 'next/server';
 
 import {
   getCurrentUserId,
@@ -25,74 +27,103 @@ import {
   securityHeaders
 } from '@/lib/security/headers';
 
-export const runtime = 'nodejs';
+export const runtime =
+  'nodejs';
 
-export async function GET(request: Request) {
-  const requestId = getRequestId(request);
+export async function GET(
+  request: Request
+) {
+  const requestId =
+    getRequestId(request);
 
   try {
-    const userId = await getCurrentUserId();
+    await getCurrentUserId();
 
-    const db = getDb();
-
-    let database = 'unavailable';
+    let database =
+      'unavailable';
 
     try {
-      await db.execute(sql`select 1`);
-      database = 'connected';
+      await getDb().execute(
+        sql`select 1`
+      );
+
+      database =
+        'connected';
     } catch (error) {
       console.error(
-        '[security/status] database check failed:',
+        '[security/status] database:',
         error
       );
     }
 
-    const audit = runSecurityAudit();
+    const audit =
+      runSecurityAudit();
 
     return NextResponse.json(
       {
         ok: true,
-        userId,
-        service: 'meridian-ai',
+        service:
+          'meridian-ai',
         database,
-        security: audit.status,
-        checks: audit.checks.map(check => ({
-          name: check.name,
-          status: check.status
-        })),
-        timestamp: new Date().toISOString(),
+        security:
+          audit.status,
+        checks:
+          audit.checks.map(
+            check => ({
+              name:
+                check.name,
+              status:
+                check.status
+            })
+          ),
+        timestamp:
+          new Date().toISOString(),
         requestId
       },
       {
         status: 200,
-        headers: securityHeaders(requestId)
+        headers:
+          securityHeaders(
+            requestId
+          )
       }
     );
   } catch (error) {
-    if (error instanceof UnauthorizedError) {
+    if (
+      error instanceof
+      UnauthorizedError
+    ) {
       return NextResponse.json(
         {
-          error: 'Authentication required.'
+          error:
+            'Authentication required.'
         },
         {
           status: 401,
-          headers: securityHeaders(requestId)
+          headers:
+            securityHeaders(
+              requestId
+            )
         }
       );
     }
 
     console.error(
-      '[security/status] failed:',
+      '[security/status]',
       error
     );
 
     return NextResponse.json(
       {
-        error: 'Unable to read security status.'
+        error:
+          'Unable to read security status.'
       },
       {
         status: 500,
-        headers: securityHeaders(requestId)
+        headers:
+          securityHeaders(
+            requestId
+          )
       }
     );
   }
