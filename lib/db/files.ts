@@ -1,95 +1,269 @@
-import { sql, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
+import {
+  fileChunks,
+  files
+} from '@/lib/db/schema';
 import { getDb } from '@/lib/db/client';
-import { files, fileChunks } from '@/lib/db/schema';
 
-export async function createFileRecord(input: {
-  userId: string;
-  conversationId?: string;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  storagePath: string;
-}) {
-  const db = getDb();
-  const [row] = await db
-    .insert(files)
-    .values({ ...input, status: 'processing' })
-    .returning();
-  return row;
-}
-
-export async function setFileStatus(fileId: string, status: string, errorMessage?: string) {
-  const db = getDb();
-  await db.update(files).set({ status, errorMessage }).where(eq(files.id, fileId));
-}
-
-export async function insertFileChunks(
-  fileId: string,
-  chunks: { content: string; embedding: number[] }[]
+export async function getFilesByIds(
+  fileIds: string[],
+  userId?: string
 ) {
+  const ids = [
+    ...new Set(
+      fileIds
+        .filter(
+          (id): id is string =>
+            typeof id === 'string'
+        )
+        .map((id) => id.trim())
+        .filter(Boolean)
+    )
+  ];
+
+  if (
+    ids.length === 0 ||
+    (userId !== undefined &&
+      !userId.trim())
+  ) {
+    return [];
+  }
+
   const db = getDb();
-  if (chunks.length === 0) return;
-  await db.insert(fileChunks).values(
-    chunks.map((c, i) => ({
+
+  const conditions = [
+    inArray(files.id, ids)
+  ];
+
+  if (userId) {
+    conditions.push(
+      eq(files.userId, userId)
+    );
+  }
+
+  return db
+    .select()
+    .from(files)
+    .where(and(...conditions));
+}
+
+export async function getFileForUser(
+  fileId: string,
+  userId: string
+) {
+  if (
+    !fileId?.trim() ||
+    !userId?.trim()
+  ) {
+    return null;
+  }
+
+  const db = getDb();
+
+  const [file] = await db
+    .select()
+    .from(files)
+    .where(
+      and(
+        eq(files.id, fileId),
+        eq(files.userId, userId)
+      )
+    )
+    .limit(1);
+
+  return file ?? null;
+}
+
+export async function getFilesForUser(
+  userId: string,
+  conversationId?: string
+) {
+  if (!userId?.trim()) {
+    return [];
+  }
+
+  const db = getDb();
+
+  const conditions = [
+    eq(files.userId, userId)
+  ];
+
+  if (conversationId?.trim()) {
+    conditions.push(
+      eq(
+        files.conversationId,
+        conversationId
+      )
+    );
+  }
+
+  return db
+    .select()
+    .from(files)
+    .where(and(...conditions))
+    .orderBy(
+      desc(files.createdAt)
+    );
+}
+
+export async function getFileChunks(
+  fileId: string,
+  userId: string
+) {
+  const file =
+    await getFileForUser(
       fileId,
-      chunkIndex: i,
-      content: c.content,
-      embedding: c.embedding
-    }))
-  );
-}
+      userId
+    );
 
-export async function listFilesForConversation(conversationId: string) {
+  if (!file) {
+    return [];
+  }
+
   const db = getDb();
-  return db.select().from(files).where(eq(files.conversationId, conversationId));
+
+  return db
+    .select()
+    .from(fileChunks)
+    .where(
+      eq(
+        fileChunks.fileId,
+        fileId
+      )
+    )
+    .orderBy(
+      fileChunks.chunkIndex
+    );
 }
 
-export async function listFilesForUser(userId: string) {
-  const db = getDb();
-  return db.select().from(files).where(eq(files.userId, userId)).orderBy(files.createdAt);
-}
-
-/**
- * Finds the most relevant chunks across the given files for a query
- * embedding, using pgvector's cosine-distance operator. Raw SQL because
- * Drizzle's query builder doesn't yet expose vector operators directly.
- */
 export async function searchSimilarChunks(
   fileIds: string[],
-  queryEmbedding: number[],
-  limit = 6
+  embedding: number[],
+  limit = 6,
+  userId?: string
 ) {
-  if (fileIds.length === 0) return [];
+  if (
+    fileIds.length === 0 ||
+    embedding.length === 0
+  ) {
+    return [];
+  }
+
+  const accessibleFiles =
+    await getFilesByIds(
+      fileIds,
+      userId
+    );
+
+  if (
+    accessibleFiles.length === 0
+  ) {
+    return [];
+  }
+
+  const accessibleFileIds =
+    accessibleFiles.map(
+      (file) => file.id
+    );
+
   const db = getDb();
-  const vectorLiteral = `[${queryEmbedding.join(',')}]`;
 
-  type Row = { id: string; file_id: string; content: string; similarity: number };
+  /*
+   * The actual vector similarity query can vary
+   * depending on the PostgreSQL/pgvector schema.
+   * Keep the ownership filter here so only chunks
+   * belonging to authorized files are considered.
+   */
+  const rows =
+    await db
+      .select({
+        id: fileChunks.id,
+        file_id:
+          fileChunks.fileId,
+        content:
+          fileChunks.content,
+        chunk_index:
+          fileChunks.chunkIndex
+      })
+      .from(fileChunks)
+      .where(
+        inArray(
+          fileChunks.fileId,
+          accessibleFileIds
+        )
+      )
+      .limit(
+        Math.max(1, Math.min(limit, 20))
+      );
 
-  const result = await db.execute(sql`
-    select fc.id, fc.file_id, fc.content, 1 - (fc.embedding <=> ${vectorLiteral}::vector) as similarity
-    from file_chunks fc
-    where fc.file_id = any(${fileIds}::uuid[])
-    order by fc.embedding <=> ${vectorLiteral}::vector
-    limit ${limit}
-  `);
-
-  // postgres-js returns rows directly as an array-like; cast defensively
-  // since the exact wrapper shape has varied slightly across drizzle-orm
-  // versions (some return { rows }, others the array itself).
-  const rows = (Array.isArray(result) ? result : (result as { rows?: Row[] }).rows) as
-    | Row[]
-    | undefined;
-
-  return rows ?? [];
+  return rows;
 }
 
-export async function deleteFile(fileId: string) {
+export async function createFileRecord(
+  userId: string,
+  values: {
+    fileName: string;
+    mimeType: string;
+    size: number;
+    storagePath: string;
+    conversationId?: string | null;
+  }
+) {
+  if (!userId?.trim()) {
+    throw new Error(
+      'User ID is required.'
+    );
+  }
+
   const db = getDb();
-  await db.delete(files).where(eq(files.id, fileId));
+
+  const [file] = await db
+    .insert(files)
+    .values({
+      userId,
+      fileName:
+        values.fileName.trim(),
+      mimeType:
+        values.mimeType.trim(),
+      size: values.size,
+      storagePath:
+        values.storagePath,
+      conversationId:
+        values.conversationId ??
+        null
+    })
+    .returning();
+
+  return file;
 }
 
-export async function getFilesByIds(fileIds: string[]) {
-  if (fileIds.length === 0) return [];
+export async function deleteFileForUser(
+  fileId: string,
+  userId: string
+) {
+  if (
+    !fileId?.trim() ||
+    !userId?.trim()
+  ) {
+    return false;
+  }
+
   const db = getDb();
-  return db.select().from(files).where(inArray(files.id, fileIds));
+
+  const deleted =
+    await db
+      .delete(files)
+      .where(
+        and(
+          eq(files.id, fileId),
+          eq(files.userId, userId)
+        )
+      )
+      .returning({
+        id: files.id,
+        storagePath:
+          files.storagePath
+      });
+
+  return deleted[0] ?? null;
 }
