@@ -10,18 +10,13 @@ import {
   customType
 } from 'drizzle-orm/pg-core';
 
-const vector = customType<{
-  data: number[];
-  driverData: string;
-}>({
+const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
     return 'vector(1024)';
   },
-
   toDriver(value: number[]): string {
     return `[${value.join(',')}]`;
   },
-
   fromDriver(value: string): number[] {
     return value
       .slice(1, -1)
@@ -30,397 +25,253 @@ const vector = customType<{
   }
 });
 
-export const messageRoleEnum = pgEnum(
-  'message_role',
-  ['system', 'user', 'assistant']
-);
+export const messageRoleEnum = pgEnum('message_role', [
+  'system',
+  'user',
+  'assistant'
+]);
 
 export const users = pgTable('users', {
-  id: uuid('id')
-    .defaultRandom()
-    .primaryKey(),
-
-  email: text('email')
-    .notNull()
-    .unique(),
-
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: text('email').notNull().unique(),
   name: text('name'),
-
   avatarUrl: text('avatar_url'),
-
   passwordHash: text('password_hash'),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-  createdAt: timestamp(
-    'created_at',
-    { withTimezone: true }
-  )
-    .defaultNow()
+export const authSessions = pgTable('auth_sessions', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id')
     .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
+  userAgent: text('user_agent'),
+  ipAddress: text('ip_address'),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull(),
+  lastSeenAt: timestamp('last_seen_at', {
+    withTimezone: true
+  }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', {
+    withTimezone: true
+  }).notNull()
 });
 
 export const profiles = pgTable('profiles', {
   userId: uuid('user_id')
     .primaryKey()
-    .references(
-      () => users.id,
-      { onDelete: 'cascade' }
-    ),
-
-  plan: text('plan')
-    .notNull()
-    .default('free'),
-
-  preferences: jsonb('preferences')
-    .notNull()
-    .default({}),
-
-  updatedAt: timestamp(
-    'updated_at',
-    { withTimezone: true }
-  )
-    .defaultNow()
-    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
+  plan: text('plan').notNull().default('free'),
+  preferences: jsonb('preferences').notNull().default({}),
+  updatedAt: timestamp('updated_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
 });
 
-export const authSessions = pgTable(
-  'auth_sessions',
-  {
-    id: text('id')
-      .primaryKey(),
+export const conversations = pgTable('conversations', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-    userAgent: text('user_agent'),
+  projectId: uuid('project_id').references(
+    () => projects.id,
+    {
+      onDelete: 'set null'
+    }
+  ),
 
-    ipAddress: text('ip_address'),
+  title: text('title')
+    .notNull()
+    .default('New chat'),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull(),
+  pinned: boolean('pinned')
+    .notNull()
+    .default(false),
 
-    lastSeenAt: timestamp(
-      'last_seen_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull(),
+  archived: boolean('archived')
+    .notNull()
+    .default(false),
 
-    expiresAt: timestamp(
-      'expires_at',
-      { withTimezone: true }
-    )
-      .notNull()
-  }
-);
+  shareToken: text('share_token').unique(),
 
-export const projects = pgTable(
-  'projects',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull(),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
+  updatedAt: timestamp('updated_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-    name: text('name')
-      .notNull(),
+export const messages = pgTable('messages', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    description: text('description'),
+  conversationId: uuid('conversation_id')
+    .notNull()
+    .references(() => conversations.id, {
+      onDelete: 'cascade'
+    }),
 
-    instructions: text('instructions'),
+  role: messageRoleEnum('role').notNull(),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  content: text('content').notNull(),
 
-export const conversations = pgTable(
-  'conversations',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  model: text('model'),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
+  toolCalls: jsonb('tool_calls'),
 
-    projectId: uuid('project_id')
-      .references(
-        () => projects.id,
-        { onDelete: 'set null' }
-      ),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-    title: text('title')
-      .notNull()
-      .default('New chat'),
+export const projects = pgTable('projects', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    pinned: boolean('pinned')
-      .notNull()
-      .default(false),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-    archived: boolean('archived')
-      .notNull()
-      .default(false),
+  name: text('name').notNull(),
 
-    shareToken: text('share_token')
-      .unique(),
+  description: text('description'),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull(),
+  instructions: text('instructions'),
 
-    updatedAt: timestamp(
-      'updated_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-export const messages = pgTable(
-  'messages',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+export const files = pgTable('files', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    conversationId: uuid(
-      'conversation_id'
-    )
-      .notNull()
-      .references(
-        () => conversations.id,
-        { onDelete: 'cascade' }
-      ),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-    role: messageRoleEnum('role')
-      .notNull(),
+  conversationId: uuid('conversation_id').references(
+    () => conversations.id,
+    {
+      onDelete: 'set null'
+    }
+  ),
 
-    content: text('content')
-      .notNull(),
+  projectId: uuid('project_id').references(
+    () => projects.id,
+    {
+      onDelete: 'set null'
+    }
+  ),
 
-    model: text('model'),
+  fileName: text('file_name').notNull(),
 
-    toolCalls: jsonb('tool_calls'),
+  mimeType: text('mime_type').notNull(),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  sizeBytes: integer('size_bytes').notNull(),
 
-export const files = pgTable(
-  'files',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  storagePath: text('storage_path').notNull(),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
+  status: text('status')
+    .notNull()
+    .default('processing'),
 
-    conversationId: uuid(
-      'conversation_id'
-    ).references(
-      () => conversations.id,
-      { onDelete: 'set null' }
-    ),
+  errorMessage: text('error_message'),
 
-    projectId: uuid('project_id')
-      .references(
-        () => projects.id,
-        { onDelete: 'set null' }
-      ),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-    fileName: text('file_name')
-      .notNull(),
+export const fileChunks = pgTable('file_chunks', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    mimeType: text('mime_type')
-      .notNull(),
+  fileId: uuid('file_id')
+    .notNull()
+    .references(() => files.id, {
+      onDelete: 'cascade'
+    }),
 
-    sizeBytes: integer(
-      'size_bytes'
-    )
-      .notNull(),
+  chunkIndex: integer('chunk_index').notNull(),
 
-    storagePath: text(
-      'storage_path'
-    )
-      .notNull(),
+  content: text('content').notNull(),
 
-    status: text('status')
-      .notNull()
-      .default('processing'),
+  embedding: vector('embedding')
+});
 
-    errorMessage: text(
-      'error_message'
-    ),
+export const agents = pgTable('agents', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-export const fileChunks = pgTable(
-  'file_chunks',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  name: text('name').notNull(),
 
-    fileId: uuid('file_id')
-      .notNull()
-      .references(
-        () => files.id,
-        { onDelete: 'cascade' }
-      ),
+  description: text('description'),
 
-    chunkIndex: integer(
-      'chunk_index'
-    )
-      .notNull(),
+  systemInstructions: text('system_instructions'),
 
-    content: text('content')
-      .notNull(),
+  model: text('model').notNull(),
 
-    embedding: vector('embedding')
-  }
-);
+  avatarUrl: text('avatar_url'),
 
-export const agents = pgTable(
-  'agents',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  visibility: text('visibility')
+    .notNull()
+    .default('private'),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-    name: text('name')
-      .notNull(),
+export const memories = pgTable('memories', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    description: text(
-      'description'
-    ),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-    systemInstructions: text(
-      'system_instructions'
-    ),
+  content: text('content').notNull(),
 
-    model: text('model')
-      .notNull(),
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
 
-    avatarUrl: text(
-      'avatar_url'
-    ),
+export const savedItems = pgTable('saved_items', {
+  id: uuid('id').defaultRandom().primaryKey(),
 
-    visibility: text(
-      'visibility'
-    )
-      .notNull()
-      .default('private'),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, {
+      onDelete: 'cascade'
+    }),
 
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  kind: text('kind').notNull(),
 
-export const memories = pgTable(
-  'memories',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
+  refId: uuid('ref_id').notNull(),
 
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
-
-    content: text('content')
-      .notNull(),
-
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
-
-export const savedItems = pgTable(
-  'saved_items',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
-
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        { onDelete: 'cascade' }
-      ),
-
-    kind: text('kind')
-      .notNull(),
-
-    refId: uuid('ref_id')
-      .notNull(),
-
-    createdAt: timestamp(
-      'created_at',
-      { withTimezone: true }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  createdAt: timestamp('created_at', {
+    withTimezone: true
+  }).defaultNow().notNull()
+});
