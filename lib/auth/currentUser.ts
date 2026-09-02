@@ -1,8 +1,9 @@
 import { getServerSession } from 'next-auth';
 import { and, eq, gt } from 'drizzle-orm';
+
 import { authOptions } from '@/lib/auth/config';
 import { getDb } from '@/lib/db/client';
-import { users, authSessions } from '@/lib/db/schema';
+import { authSessions, users } from '@/lib/db/schema';
 
 export class UnauthorizedError extends Error {
   public readonly status = 401 as const;
@@ -23,24 +24,25 @@ export interface CurrentUser {
   sessionId: string;
 }
 
-interface SessionUser {
+type SessionUserShape = {
   id?: string;
   sessionId?: string;
   email?: string | null;
   name?: string | null;
   image?: string | null;
-}
+};
+
+type SessionShape = {
+  user?: SessionUserShape;
+} | null;
 
 function getSessionUser(
-  session: Awaited<
-    ReturnType<typeof getServerSession>
-  >
-): SessionUser | null {
-  if (!session?.user) {
-    return null;
-  }
+  session: unknown
+): SessionUserShape | null {
+  const typedSession =
+    session as SessionShape;
 
-  return session.user as SessionUser;
+  return typedSession?.user ?? null;
 }
 
 async function validateDatabaseSession(
@@ -56,8 +58,14 @@ async function validateDatabaseSession(
     .from(authSessions)
     .where(
       and(
-        eq(authSessions.id, sessionId),
-        eq(authSessions.userId, userId),
+        eq(
+          authSessions.id,
+          sessionId
+        ),
+        eq(
+          authSessions.userId,
+          userId
+        ),
         gt(
           authSessions.expiresAt,
           new Date()
@@ -70,8 +78,8 @@ async function validateDatabaseSession(
 }
 
 async function touchDatabaseSession(
-  sessionId: string,
-  userId: string
+  userId: string,
+  sessionId: string
 ): Promise<void> {
   const db = getDb();
 
@@ -82,17 +90,20 @@ async function touchDatabaseSession(
     })
     .where(
       and(
-        eq(authSessions.id, sessionId),
-        eq(authSessions.userId, userId)
+        eq(
+          authSessions.id,
+          sessionId
+        ),
+        eq(
+          authSessions.userId,
+          userId
+        )
       )
     );
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
-  let session:
-    Awaited<
-      ReturnType<typeof getServerSession>
-    >;
+  let session: unknown;
 
   try {
     session =
@@ -110,12 +121,12 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   }
 
-  const user =
+  const sessionUser =
     getSessionUser(session);
 
   if (
-    !user?.id ||
-    !user.sessionId
+    !sessionUser?.id ||
+    !sessionUser.sessionId
   ) {
     throw new UnauthorizedError(
       'You must be signed in to continue.'
@@ -123,10 +134,10 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   }
 
   const userId =
-    user.id.trim();
+    sessionUser.id.trim();
 
   const sessionId =
-    user.sessionId.trim();
+    sessionUser.sessionId.trim();
 
   if (
     !userId ||
@@ -138,21 +149,21 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   }
 
   try {
-    const isActive =
+    const active =
       await validateDatabaseSession(
         userId,
         sessionId
       );
 
-    if (!isActive) {
+    if (!active) {
       throw new UnauthorizedError(
         'Your session has expired or been revoked. Please sign in again.'
       );
     }
 
     await touchDatabaseSession(
-      sessionId,
-      userId
+      userId,
+      sessionId
     );
 
     const db = getDb();
@@ -168,7 +179,10 @@ export async function getCurrentUser(): Promise<CurrentUser> {
         })
         .from(users)
         .where(
-          eq(users.id, userId)
+          eq(
+            users.id,
+            userId
+          )
         )
         .limit(1);
 
@@ -180,15 +194,14 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 
     return {
       id: databaseUser.id,
-      email:
-        databaseUser.email,
+      email: databaseUser.email,
       name:
         databaseUser.name ??
-        user.name ??
+        sessionUser.name ??
         null,
       image:
         databaseUser.avatarUrl ??
-        user.image ??
+        sessionUser.image ??
         null,
       sessionId
     };
@@ -258,14 +271,35 @@ export function isUnauthorizedError(
 
 export function unauthorizedResponse(
   message = 'Authentication required.'
-): Response {
-  return Response.json(
+) {
+  return new Response(
+    JSON.stringify({
+      error: message
+    }),
     {
-      error: 'UNAUTHORIZED',
-      message
-    },
-    {
-      status: 401
+      status: 401,
+      headers: {
+        'Content-Type':
+          'application/json',
+        'Cache-Control':
+          'no-store',
+        'X-Content-Type-Options':
+          'nosniff'
+      }
     }
   );
+}
+
+export async function requireUser(): Promise<CurrentUser> {
+  return getCurrentUser();
+}
+
+export async function requireUserId(): Promise<string> {
+  return getCurrentUserId();
+}
+
+export async function requireUserOrNull(): Promise<
+  CurrentUser | null
+> {
+  return getOptionalCurrentUser();
 }
