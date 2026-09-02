@@ -1,223 +1,270 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
-import { useSession, signIn, signOut } from 'next-auth/react';
+import { usePathname, useRouter } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 import {
-  PanelLeftClose,
-  PanelLeftOpen,
+  Archive,
+  ChevronDown,
+  FolderKanban,
+  LogOut,
+  MessageSquare,
   Plus,
   Search,
-  FolderKanban,
-  Bot,
-  Library,
   Settings,
-  X,
-  LogIn
+  Sparkles,
+  Trash2
 } from 'lucide-react';
-import { MeridianMark } from '@/components/ui/MeridianMark';
-import { Avatar } from '@/components/ui/Avatar';
-import { Tooltip } from '@/components/ui/Tooltip';
-import { Dropdown, DropdownItem } from '@/components/ui/Dropdown';
-import { cn } from '@/lib/utils/cn';
-
-export interface ConversationSummary {
-  id: string;
-  title: string;
-}
+import { useState } from 'react';
 
 interface SidebarProps {
-  conversations: ConversationSummary[];
-  activeConversationId?: string;
-  mobileOpen: boolean;
-  onMobileClose: () => void;
+  open?: boolean;
+  onClose?: () => void;
 }
 
-export function Sidebar({
-  conversations,
-  activeConversationId,
-  mobileOpen,
-  onMobileClose
+export default function Sidebar({
+  open = true,
+  onClose
 }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const { data: session, status } = useSession();
+  const pathname = usePathname();
+  const router = useRouter();
+
+  const [userMenuOpen, setUserMenuOpen] =
+    useState(false);
+  const [loggingOut, setLoggingOut] =
+    useState(false);
+
+  const isActive = (path: string) => {
+    if (path === '/') {
+      return pathname === '/';
+    }
+
+    return pathname === path ||
+      pathname.startsWith(`${path}/`);
+  };
+
+  const handleLogout = async () => {
+    if (loggingOut) {
+      return;
+    }
+
+    try {
+      setLoggingOut(true);
+
+      await signOut({
+        callbackUrl: '/login'
+      });
+    } catch (error) {
+      console.error(
+        '[sidebar] Logout failed:',
+        error
+      );
+
+      setLoggingOut(false);
+    }
+  };
+
+  const navigate = (path: string) => {
+    router.push(path);
+    onClose?.();
+  };
+
+  if (!open) {
+    return null;
+  }
 
   return (
-    <>
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-ink/40 backdrop-blur-sm md:hidden"
-          onClick={onMobileClose}
-          aria-hidden
-        />
-      )}
+    <aside className="flex h-full w-full max-w-[280px] flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
+        <Link
+          href="/"
+          onClick={onClose}
+          className="flex items-center gap-2"
+        >
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-black text-white dark:bg-white dark:text-black">
+            <Sparkles size={18} />
+          </div>
 
-      <aside
-        className={cn(
-          'fixed inset-y-0 left-0 z-50 flex h-full flex-col border-r border-slate-border bg-surface-light transition-all duration-200 dark:border-slate-border-dark dark:bg-surface-dark md:static md:z-auto',
-          collapsed ? 'md:w-[64px]' : 'md:w-[272px]',
-          mobileOpen ? 'w-[280px] translate-x-0' : '-translate-x-full md:translate-x-0 md:w-auto'
-        )}
-      >
-        <div className="safe-top flex items-center justify-between px-3 pt-3">
-          <Link href="/" className="flex items-center gap-2 px-1.5 py-2">
-            <MeridianMark size={22} />
-            {!collapsed && (
-              <span className="font-display text-[15px] font-medium tracking-tight">
-                Meridian
-              </span>
-            )}
-          </Link>
-          <button
-            className="hidden rounded-lg p-1.5 text-slate hover:bg-slate-border/40 md:block"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-          </button>
-          <button
-            className="rounded-lg p-1.5 text-slate hover:bg-slate-border/40 md:hidden"
-            onClick={onMobileClose}
-            aria-label="Close menu"
-          >
-            <X size={18} />
-          </button>
+          <span className="text-lg font-semibold tracking-tight">
+            Meridian AI
+          </span>
+        </Link>
+      </div>
+
+      <div className="p-3">
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 dark:bg-white dark:text-black"
+        >
+          <Plus size={17} />
+          New chat
+        </button>
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 pb-4">
+        <div className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+          Workspace
         </div>
 
-        <div className="mt-2 flex flex-col gap-1 px-2">
-          <SidebarLink href="/" icon={<Plus size={17} />} label="New chat" collapsed={collapsed} primary />
-          <SidebarLink href="/search" icon={<Search size={17} />} label="Search" collapsed={collapsed} />
+        <div className="space-y-1">
+          <SidebarLink
+            href="/"
+            icon={<MessageSquare size={17} />}
+            label="Chats"
+            active={isActive('/')}
+            onClick={onClose}
+          />
+
+          <SidebarLink
+            href="/search"
+            icon={<Search size={17} />}
+            label="Search"
+            active={isActive('/search')}
+            onClick={onClose}
+          />
+
+          <SidebarLink
+            href="/projects"
+            icon={<FolderKanban size={17} />}
+            label="Projects"
+            active={isActive('/projects')}
+            onClick={onClose}
+          />
+
+          <SidebarLink
+            href="/library"
+            icon={<Archive size={17} />}
+            label="Library"
+            active={isActive('/library')}
+            onClick={onClose}
+          />
         </div>
 
-        <nav className="mt-4 flex-1 overflow-y-auto scrollbar-thin px-2 pb-2">
-          {!collapsed && conversations.length > 0 && (
-            <SidebarSection label="Recent">
-              {conversations.map((c) => (
-                <SidebarLink
-                  key={c.id}
-                  href={`/c/${c.id}`}
-                  label={c.title}
-                  collapsed={collapsed}
-                  active={c.id === activeConversationId}
-                  truncate
-                />
-              ))}
-            </SidebarSection>
-          )}
+        <div className="mb-2 mt-7 px-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+          Account
+        </div>
 
-          <SidebarSection label={collapsed ? undefined : 'Workspace'}>
-            <SidebarLink
-              href="/projects"
-              icon={<FolderKanban size={17} />}
-              label="Projects"
-              collapsed={collapsed}
-            />
-            <SidebarLink href="/agents" icon={<Bot size={17} />} label="Agents" collapsed={collapsed} />
-            <SidebarLink href="/library" icon={<Library size={17} />} label="Library" collapsed={collapsed} />
-          </SidebarSection>
-        </nav>
-
-        <div className="safe-bottom border-t border-slate-border px-2 py-2 dark:border-slate-border-dark">
+        <div className="space-y-1">
           <SidebarLink
             href="/settings"
             icon={<Settings size={17} />}
             label="Settings"
-            collapsed={collapsed}
+            active={isActive('/settings')}
+            onClick={onClose}
           />
-
-          {status === 'authenticated' && session?.user ? (
-            <Dropdown
-              trigger={
-                <button
-                  className={cn(
-                    'mt-1 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-slate-border/30',
-                    collapsed && 'justify-center'
-                  )}
-                >
-                  <Avatar
-                    name={session.user.name ?? session.user.email ?? 'User'}
-                    imageUrl={session.user.image ?? undefined}
-                    size={26}
-                  />
-                  {!collapsed && (
-                    <div className="min-w-0 text-left">
-                      <p className="truncate text-[13px] font-medium">
-                        {session.user.name ?? session.user.email}
-                      </p>
-                      <p className="truncate text-[11px] text-slate">Signed in</p>
-                    </div>
-                  )}
-                </button>
-              }
-            >
-              <DropdownItem onClick={() => signOut({ callbackUrl: '/' })}>Sign out</DropdownItem>
-            </Dropdown>
-          ) : (
-            <button
-              onClick={() => signIn('google')}
-              className={cn(
-                'mt-1 flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-[13px] font-medium text-cobalt hover:bg-cobalt/5',
-                collapsed && 'justify-center'
-              )}
-            >
-              <LogIn size={17} />
-              {!collapsed && <span>Sign in with Google</span>}
-            </button>
-          )}
         </div>
-      </aside>
-    </>
+      </nav>
+
+      <div className="relative border-t border-zinc-200 p-3 dark:border-zinc-800">
+        {userMenuOpen && (
+          <div className="absolute bottom-[calc(100%+8px)] left-3 right-3 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+            <button
+              type="button"
+              onClick={() => {
+                setUserMenuOpen(false);
+                navigate('/settings');
+              }}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <Settings size={17} />
+              Settings
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setUserMenuOpen(false);
+                navigate('/settings');
+              }}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <Trash2 size={17} />
+              Account settings
+            </button>
+
+            <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
+
+            <button
+              type="button"
+              disabled={loggingOut}
+              onClick={handleLogout}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-red-950/30"
+            >
+              <LogOut size={17} />
+
+              {loggingOut
+                ? 'Logging out...'
+                : 'Log out'}
+            </button>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() =>
+            setUserMenuOpen(
+              (current) => !current
+            )
+          }
+          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
+          aria-expanded={userMenuOpen}
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+            M
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">
+              Meridian User
+            </div>
+
+            <div className="truncate text-xs text-zinc-500">
+              Account
+            </div>
+          </div>
+
+          <ChevronDown
+            size={17}
+            className={`shrink-0 text-zinc-500 transition-transform ${
+              userMenuOpen
+                ? 'rotate-180'
+                : ''
+            }`}
+          />
+        </button>
+      </div>
+    </aside>
   );
 }
 
-function SidebarSection({ label, children }: { label?: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-3">
-      {label && (
-        <p className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-light">
-          {label}
-        </p>
-      )}
-      <div className="flex flex-col gap-0.5">{children}</div>
-    </div>
-  );
+interface SidebarLinkProps {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  onClick?: () => void;
 }
 
 function SidebarLink({
   href,
   icon,
   label,
-  collapsed,
-  active,
-  primary,
-  truncate
-}: {
-  href: string;
-  icon?: React.ReactNode;
-  label: string;
-  collapsed: boolean;
-  active?: boolean;
-  primary?: boolean;
-  truncate?: boolean;
-}) {
-  const content = (
+  active = false,
+  onClick
+}: SidebarLinkProps) {
+  return (
     <Link
       href={href}
-      className={cn(
-        'flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13.5px] transition-colors',
-        collapsed && 'justify-center px-0 py-2.5',
-        primary && 'border border-cobalt/30 text-cobalt hover:bg-cobalt/5',
-        active && 'bg-cobalt/10 font-medium text-cobalt',
-        !active && !primary && 'text-ink hover:bg-slate-border/30 dark:text-paper'
-      )}
+      onClick={onClick}
+      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${
+        active
+          ? 'bg-zinc-100 font-medium text-zinc-950 dark:bg-zinc-900 dark:text-white'
+          : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-white'
+      }`}
     >
       {icon}
-      {!collapsed && <span className={cn(truncate && 'truncate')}>{label}</span>}
+      <span>{label}</span>
     </Link>
   );
-
-  if (collapsed) {
-    return <Tooltip content={label}>{content}</Tooltip>;
-  }
-  return content;
 }
