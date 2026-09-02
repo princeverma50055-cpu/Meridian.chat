@@ -1,30 +1,39 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import {
+  useEffect,
+  useState
+} from 'react';
+
 import { useParams } from 'next/navigation';
 
 import { AppShell } from '@/components/layout/AppShell';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import { MessageList } from '@/components/chat/MessageList';
 import { ChatComposer } from '@/components/chat/ChatComposer';
-
 import { useChat } from '@/lib/hooks/useChat';
+
 import type { Attachment } from '@/lib/types/chat';
 
 export default function ConversationPage() {
-  const params = useParams<{
-    id: string;
-  }>();
+  const params =
+    useParams<{ id: string }>();
 
-  const conversationId = params.id;
+  const [input, setInput] =
+    useState('');
 
-  const [input, setInput] = useState('');
   const [model, setModel] =
     useState('meridian-fast');
+
   const [attachedFiles, setAttachedFiles] =
     useState<Attachment[]>([]);
+
   const [webSearchEnabled, setWebSearchEnabled] =
     useState(false);
+
+  const [deepResearchEnabled, setDeepResearchEnabled] =
+    useState(false);
+
   const [loaded, setLoaded] =
     useState(false);
 
@@ -36,115 +45,60 @@ export default function ConversationPage() {
     stop,
     editMessage,
     loadConversation
-  } = useChat(conversationId);
+  } = useChat(params.id);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!params.id) return;
 
-    setLoaded(false);
+    loadConversation(
+      params.id
+    ).finally(() => {
+      setLoaded(true);
+    });
 
-    loadConversation(conversationId)
-      .finally(() => {
-        setLoaded(true);
-      });
-  }, [
-    conversationId,
-    loadConversation
-  ]);
+    // loadConversation is intentionally
+    // called when route id changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id]);
 
   function handleSend() {
     if (
       !input.trim() ||
-      isGenerating ||
-      !conversationId
+      isGenerating
     ) {
       return;
     }
 
-    const fileIds = attachedFiles.map(
-      (file) => file.id
-    );
+    const fileIds =
+      attachedFiles.map(
+        (file) => file.id
+      );
 
     sendMessage(
       input,
       model,
       fileIds,
       webSearchEnabled,
-      attachedFiles
+      attachedFiles,
+      deepResearchEnabled
     );
 
     setInput('');
     setAttachedFiles([]);
   }
 
-  async function handleShare() {
-    if (!conversationId) {
-      return;
-    }
+  const firstMessage =
+    messages[0];
 
-    try {
-      const response = await fetch(
-        `/api/conversations/${conversationId}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            share: true
-          })
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            'Failed to create share link.'
-        );
-      }
-
-      const token =
-        data?.conversation?.shareToken;
-
-      if (
-        typeof token !== 'string' ||
-        !token
-      ) {
-        throw new Error(
-          'Share token was not returned.'
-        );
-      }
-
-      const shareUrl =
-        `${window.location.origin}/api/share/${token}`;
-
-      await navigator.clipboard.writeText(
-        shareUrl
-      );
-
-      window.alert(
-        'Share link copied to clipboard.'
-      );
-    } catch (error) {
-      window.alert(
-        error instanceof Error
-          ? error.message
-          : 'Failed to create share link.'
-      );
-    }
-  }
-
-  const firstMessage = messages[0];
-
-  const title = firstMessage
-    ? firstMessage.content
-        .replace(/\s+/g, ' ')
-        .slice(0, 48)
-    : loaded
-      ? 'Conversation'
-      : 'Loading…';
+  const title =
+    firstMessage
+      ? firstMessage.content.slice(
+          0,
+          48
+        )
+      : loaded
+        ? 'Conversation'
+        : 'Loading…';
 
   return (
     <AppShell>
@@ -152,29 +106,48 @@ export default function ConversationPage() {
 
       <MessageList
         messages={messages}
-        isGenerating={isGenerating}
-        onRegenerate={(id) =>
-          regenerate(id, model)
+        isGenerating={
+          isGenerating
         }
-        onEdit={(id, content) =>
+        onRegenerate={(id) =>
+          regenerate(
+            id,
+            model,
+            undefined,
+            webSearchEnabled,
+            deepResearchEnabled
+          )
+        }
+        onEdit={(
+          id,
+          content
+        ) =>
           editMessage(
             id,
             content,
-            model
+            model,
+            undefined,
+            webSearchEnabled,
+            deepResearchEnabled
           )
         }
-        onShare={handleShare}
       />
 
       <ChatComposer
         value={input}
         onChange={setInput}
         onSend={handleSend}
-        isGenerating={isGenerating}
+        isGenerating={
+          isGenerating
+        }
         onStop={stop}
         model={model}
-        onModelChange={setModel}
-        conversationId={conversationId}
+        onModelChange={
+          setModel
+        }
+        conversationId={
+          params.id
+        }
         onAttachedFilesChange={
           setAttachedFiles
         }
@@ -183,6 +156,12 @@ export default function ConversationPage() {
         }
         onWebSearchEnabledChange={
           setWebSearchEnabled
+        }
+        deepResearchEnabled={
+          deepResearchEnabled
+        }
+        onDeepResearchEnabledChange={
+          setDeepResearchEnabled
         }
       />
     </AppShell>
