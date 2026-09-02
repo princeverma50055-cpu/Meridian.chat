@@ -1,107 +1,202 @@
-import { NextResponse } from 'next/server';
-import { and, desc, eq, gt, lte } from 'drizzle-orm';
-import { getServerSession } from 'next-auth';
+import {
+  NextResponse
+} from 'next/server';
+
+import {
+  eq,
+  and,
+  gt,
+  desc
+} from 'drizzle-orm';
 
 import {
   getCurrentUserId,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
-import { authOptions } from '@/lib/auth/config';
-import { getDb } from '@/lib/db/client';
-import { authSessions } from '@/lib/db/schema';
+
+import {
+  getDb
+} from '@/lib/db/client';
+
+import {
+  authSessions
+} from '@/lib/db/schema';
+
+import {
+  getServerSession
+} from 'next-auth';
+
+import {
+  authOptions
+} from '@/lib/auth/config';
 
 export const runtime = 'nodejs';
 
+function jsonError(
+  message: string,
+  status: number
+) {
+  return NextResponse.json(
+    {
+      error: message
+    },
+    {
+      status,
+      headers: {
+        'Cache-Control':
+          'no-store',
+        'X-Content-Type-Options':
+          'nosniff'
+      }
+    }
+  );
+}
+
 export async function GET() {
   try {
-    const userId = await getCurrentUserId();
-    const session = await getServerSession(authOptions);
+    const userId =
+      await getCurrentUserId();
 
-    const currentSessionId = (
-      session?.user as
-        | { sessionId?: string }
-        | undefined
-    )?.sessionId;
+    const session =
+      await getServerSession(
+        authOptions
+      );
 
-    const db = getDb();
-    const now = new Date();
+    const currentSessionId =
+      (
+        session?.user as
+          | {
+              sessionId?: string;
+            }
+          | undefined
+      )?.sessionId;
 
-    // Clean up expired sessions for this user.
+    const db =
+      getDb();
+
+    /*
+     * Remove expired sessions belonging
+     * to this user before returning the list.
+     */
     await db
       .delete(authSessions)
       .where(
         and(
-          eq(authSessions.userId, userId),
-          lte(authSessions.expiresAt, now)
+          eq(
+            authSessions.userId,
+            userId
+          ),
+          gt(
+            new Date(),
+            authSessions.expiresAt
+          )
         )
       );
 
-    const rows = await db
-      .select({
-        id: authSessions.id,
-        userAgent: authSessions.userAgent,
-        ipAddress: authSessions.ipAddress,
-        createdAt: authSessions.createdAt,
-        lastSeenAt: authSessions.lastSeenAt,
-        expiresAt: authSessions.expiresAt
-      })
-      .from(authSessions)
-      .where(
-        and(
-          eq(authSessions.userId, userId),
-          gt(authSessions.expiresAt, now)
-        )
-      )
-      .orderBy(desc(authSessions.lastSeenAt));
+    /*
+     * Return only non-expired sessions
+     * belonging to the authenticated user.
+     */
+    const rows =
+      await db
+        .select({
+          id:
+            authSessions.id,
 
-    const sessions = rows.map((row) => ({
-      id: row.id,
-      userAgent: row.userAgent,
-      ipAddress: row.ipAddress,
-      createdAt: row.createdAt,
-      lastSeenAt: row.lastSeenAt,
-      expiresAt: row.expiresAt,
-      current: row.id === currentSessionId
-    }));
+          userAgent:
+            authSessions.userAgent,
+
+          ipAddress:
+            authSessions.ipAddress,
+
+          createdAt:
+            authSessions.createdAt,
+
+          lastSeenAt:
+            authSessions.lastSeenAt,
+
+          expiresAt:
+            authSessions.expiresAt
+        })
+        .from(authSessions)
+        .where(
+          and(
+            eq(
+              authSessions.userId,
+              userId
+            ),
+            gt(
+              authSessions.expiresAt,
+              new Date()
+            )
+          )
+        )
+        .orderBy(
+          desc(
+            authSessions.lastSeenAt
+          )
+        );
 
     return NextResponse.json(
-      { sessions },
+      {
+        sessions:
+          rows.map(
+            (row) => ({
+              id: row.id,
+
+              userAgent:
+                row.userAgent,
+
+              /*
+               * IP is included only for the
+               * authenticated account owner.
+               */
+              ipAddress:
+                row.ipAddress,
+
+              createdAt:
+                row.createdAt,
+
+              lastSeenAt:
+                row.lastSeenAt,
+
+              expiresAt:
+                row.expiresAt,
+
+              current:
+                row.id ===
+                currentSessionId
+            })
+          )
+      },
       {
         status: 200,
         headers: {
-          'Cache-Control': 'private, no-store, max-age=0',
-          'X-Content-Type-Options': 'nosniff'
+          'Cache-Control':
+            'private, no-store, max-age=0',
+          'X-Content-Type-Options':
+            'nosniff'
         }
       }
     );
   } catch (error) {
-    if (error instanceof UnauthorizedError) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        {
-          status: 401,
-          headers: {
-            'Cache-Control': 'no-store'
-          }
-        }
-      );
-    }
-
     console.error(
-      'Active sessions error:',
+      '[security/sessions] failed:',
       error
     );
 
-    return NextResponse.json(
-      {
-        error: 'Failed to load active sessions'
-      },
-      {
-        status: 500,
-        headers: {
-          'Cache-Control': 'no-store'
-        }
-      }
+    return jsonError(
+      error instanceof Error &&
+        error.message
+          .toLowerCase()
+          .includes(
+            'session'
+          )
+        ? error.message
+        : 'Authentication required.',
+      error instanceof UnauthorizedError
+        ? 401
+        : 500
     );
   }
 }
