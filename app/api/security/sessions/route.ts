@@ -1,34 +1,19 @@
+import { NextResponse } from 'next/server';
 import {
-  NextResponse
-} from 'next/server';
-
-import {
-  eq,
   and,
+  desc,
+  eq,
   gt,
-  desc
+  lt
 } from 'drizzle-orm';
 
 import {
-  getCurrentUserId,
+  getCurrentUser,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
 
-import {
-  getDb
-} from '@/lib/db/client';
-
-import {
-  authSessions
-} from '@/lib/db/schema';
-
-import {
-  getServerSession
-} from 'next-auth';
-
-import {
-  authOptions
-} from '@/lib/auth/config';
+import { getDb } from '@/lib/db/client';
+import { authSessions } from '@/lib/db/schema';
 
 export const runtime = 'nodejs';
 
@@ -54,29 +39,14 @@ function jsonError(
 
 export async function GET() {
   try {
-    const userId =
-      await getCurrentUserId();
+    const user =
+      await getCurrentUser();
 
-    const session =
-      await getServerSession(
-        authOptions
-      );
-
-    const currentSessionId =
-      (
-        session?.user as
-          | {
-              sessionId?: string;
-            }
-          | undefined
-      )?.sessionId;
-
-    const db =
-      getDb();
+    const db = getDb();
 
     /*
      * Remove expired sessions belonging
-     * to this user before returning the list.
+     * only to the authenticated user.
      */
     await db
       .delete(authSessions)
@@ -84,37 +54,30 @@ export async function GET() {
         and(
           eq(
             authSessions.userId,
-            userId
+            user.id
           ),
-          gt(
-            new Date(),
-            authSessions.expiresAt
+          lt(
+            authSessions.expiresAt,
+            new Date()
           )
         )
       );
 
     /*
-     * Return only non-expired sessions
-     * belonging to the authenticated user.
+     * Return active sessions only.
      */
     const rows =
       await db
         .select({
-          id:
-            authSessions.id,
-
+          id: authSessions.id,
           userAgent:
             authSessions.userAgent,
-
           ipAddress:
             authSessions.ipAddress,
-
           createdAt:
             authSessions.createdAt,
-
           lastSeenAt:
             authSessions.lastSeenAt,
-
           expiresAt:
             authSessions.expiresAt
         })
@@ -123,7 +86,7 @@ export async function GET() {
           and(
             eq(
               authSessions.userId,
-              userId
+              user.id
             ),
             gt(
               authSessions.expiresAt,
@@ -140,34 +103,22 @@ export async function GET() {
     return NextResponse.json(
       {
         sessions:
-          rows.map(
-            (row) => ({
-              id: row.id,
-
-              userAgent:
-                row.userAgent,
-
-              /*
-               * IP is included only for the
-               * authenticated account owner.
-               */
-              ipAddress:
-                row.ipAddress,
-
-              createdAt:
-                row.createdAt,
-
-              lastSeenAt:
-                row.lastSeenAt,
-
-              expiresAt:
-                row.expiresAt,
-
-              current:
-                row.id ===
-                currentSessionId
-            })
-          )
+          rows.map((row) => ({
+            id: row.id,
+            userAgent:
+              row.userAgent,
+            ipAddress:
+              row.ipAddress,
+            createdAt:
+              row.createdAt,
+            lastSeenAt:
+              row.lastSeenAt,
+            expiresAt:
+              row.expiresAt,
+            current:
+              row.id ===
+              user.sessionId
+          }))
       },
       {
         status: 200,
@@ -180,23 +131,23 @@ export async function GET() {
       }
     );
   } catch (error) {
+    if (
+      error instanceof UnauthorizedError
+    ) {
+      return jsonError(
+        'Authentication required',
+        401
+      );
+    }
+
     console.error(
-      '[security/sessions] failed:',
+      '[sessions] Failed to list sessions:',
       error
     );
 
     return jsonError(
-      error instanceof Error &&
-        error.message
-          .toLowerCase()
-          .includes(
-            'session'
-          )
-        ? error.message
-        : 'Authentication required.',
-      error instanceof UnauthorizedError
-        ? 401
-        : 500
+      'Failed to load sessions',
+      500
     );
   }
 }
