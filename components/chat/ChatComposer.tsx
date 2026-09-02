@@ -1,28 +1,27 @@
 'use client';
 
 import {
-  AlertCircle,
-  ArrowUp,
-  FileText,
-  Globe,
-  Loader2,
-  Mic,
-  Plus,
-  Square,
-  Telescope,
-  Wrench,
-  X
-} from 'lucide-react';
-import {
   useEffect,
   useRef,
-  useState
+  useState,
+  type KeyboardEvent,
+  type ReactNode
 } from 'react';
-
 import {
-  Dropdown,
-  DropdownItem
-} from '@/components/ui/Dropdown';
+  Plus,
+  Globe,
+  Telescope,
+  Wrench,
+  Mic,
+  ArrowUp,
+  Square,
+  X,
+  FileText,
+  Loader2,
+  AlertCircle
+} from 'lucide-react';
+
+import { Dropdown, DropdownItem } from '@/components/ui/Dropdown';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ModelSelector } from '@/components/chat/ModelSelector';
 import { cn } from '@/lib/utils/cn';
@@ -49,14 +48,23 @@ interface ChatComposerProps {
   onSend: () => void;
   isGenerating: boolean;
   onStop: () => void;
+
   model: string;
   onModelChange: (id: string) => void;
+
   conversationId?: string;
+
   onAttachedFilesChange: (
     files: Attachment[]
   ) => void;
+
   webSearchEnabled: boolean;
   onWebSearchEnabledChange: (
+    enabled: boolean
+  ) => void;
+
+  deepResearchEnabled: boolean;
+  onDeepResearchEnabledChange: (
     enabled: boolean
   ) => void;
 }
@@ -72,7 +80,9 @@ export function ChatComposer({
   conversationId,
   onAttachedFilesChange,
   webSearchEnabled,
-  onWebSearchEnabledChange
+  onWebSearchEnabledChange,
+  deepResearchEnabled,
+  onDeepResearchEnabledChange
 }: ChatComposerProps) {
   const textareaRef =
     useRef<HTMLTextAreaElement>(null);
@@ -83,12 +93,6 @@ export function ChatComposer({
   const recognitionRef =
     useRef<any>(null);
 
-  const recognitionBaseValueRef =
-    useRef('');
-
-  const [deepResearchOn, setDeepResearchOn] =
-    useState(false);
-
   const [attachments, setAttachments] =
     useState<PendingAttachment[]>([]);
 
@@ -98,28 +102,32 @@ export function ChatComposer({
   const [voiceSupported, setVoiceSupported] =
     useState(true);
 
-  const [uploadingCount, setUploadingCount] =
-    useState(0);
+  /*
+   * ---------------------------------------------------------
+   * Auto resize textarea
+   * ---------------------------------------------------------
+   */
 
   useEffect(() => {
-    const element =
-      textareaRef.current;
+    const el = textareaRef.current;
 
-    if (!element) {
-      return;
-    }
+    if (!el) return;
 
-    element.style.height = 'auto';
-
-    element.style.height =
-      `${Math.min(
-        element.scrollHeight,
-        200
-      )}px`;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(
+      el.scrollHeight,
+      200
+    )}px`;
   }, [value]);
 
+  /*
+   * ---------------------------------------------------------
+   * Expose only successfully uploaded files
+   * ---------------------------------------------------------
+   */
+
   useEffect(() => {
-    const readyAttachments: Attachment[] =
+    const readyFiles: Attachment[] =
       attachments
         .filter(
           (attachment) =>
@@ -129,26 +137,26 @@ export function ChatComposer({
           id: attachment.id,
           name: attachment.name,
           type: attachment.mimeType,
-          sizeBytes:
-            attachment.sizeBytes
+          sizeBytes: attachment.sizeBytes
         }));
 
-    onAttachedFilesChange(
-      readyAttachments
-    );
-  }, [
-    attachments,
-    onAttachedFilesChange
-  ]);
+    onAttachedFilesChange(readyFiles);
+
+    // onAttachedFilesChange intentionally excluded
+    // because parent setter is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachments]);
+
+  /*
+   * ---------------------------------------------------------
+   * Browser speech recognition
+   * ---------------------------------------------------------
+   */
 
   useEffect(() => {
     const SpeechRecognition =
-      typeof window !== 'undefined'
-        ? (window as any)
-            .SpeechRecognition ||
-          (window as any)
-            .webkitSpeechRecognition
-        : null;
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       setVoiceSupported(false);
@@ -162,15 +170,13 @@ export function ChatComposer({
     recognition.interimResults = true;
     recognition.lang = 'en-IN';
 
+    let baseValue = '';
+
     recognition.onstart = () => {
-      recognitionBaseValueRef.current =
-        value.trim();
-      setRecording(true);
+      baseValue = value;
     };
 
-    recognition.onresult = (
-      event: any
-    ) => {
+    recognition.onresult = (event: any) => {
       let transcript = '';
 
       for (
@@ -179,25 +185,14 @@ export function ChatComposer({
         i += 1
       ) {
         transcript +=
-          event.results[i][0]
-            .transcript;
+          event.results[i][0].transcript;
       }
 
-      const cleanTranscript =
-        transcript.trim();
+      const nextValue = baseValue
+        ? `${baseValue} ${transcript}`
+        : transcript;
 
-      if (!cleanTranscript) {
-        return;
-      }
-
-      const base =
-        recognitionBaseValueRef.current;
-
-      onChange(
-        base
-          ? `${base} ${cleanTranscript}`
-          : cleanTranscript
-      );
+      onChange(nextValue);
     };
 
     recognition.onerror = () => {
@@ -208,8 +203,7 @@ export function ChatComposer({
       setRecording(false);
     };
 
-    recognitionRef.current =
-      recognition;
+    recognitionRef.current = recognition;
 
     return () => {
       try {
@@ -219,29 +213,22 @@ export function ChatComposer({
       }
 
       recognition.onresult = null;
-      recognition.onstart = null;
       recognition.onend = null;
       recognition.onerror = null;
-
-      recognitionRef.current = null;
     };
-    // The recognition instance should be created once.
+
+    // Speech recognition is initialized once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggleRecording() {
-    const recognition =
-      recognitionRef.current;
-
-    if (!recognition) {
-      return;
-    }
+    if (!recognitionRef.current) return;
 
     if (recording) {
       try {
-        recognition.stop();
+        recognitionRef.current.stop();
       } catch {
-        // Already stopped.
+        // Ignore stop errors.
       }
 
       setRecording(false);
@@ -249,17 +236,21 @@ export function ChatComposer({
     }
 
     try {
-      recognitionBaseValueRef.current =
-        value.trim();
-
-      recognition.start();
+      recognitionRef.current.start();
+      setRecording(true);
     } catch {
       setRecording(false);
     }
   }
 
+  /*
+   * ---------------------------------------------------------
+   * Keyboard send
+   * ---------------------------------------------------------
+   */
+
   function handleKeyDown(
-    event: React.KeyboardEvent<HTMLTextAreaElement>
+    event: KeyboardEvent<HTMLTextAreaElement>
   ) {
     if (
       event.key === 'Enter' &&
@@ -269,49 +260,44 @@ export function ChatComposer({
 
       if (
         value.trim() &&
-        !isGenerating &&
-        uploadingCount === 0
+        !isGenerating
       ) {
         onSend();
       }
     }
   }
 
-  function removeAttachment(
-    id: string
+  /*
+   * ---------------------------------------------------------
+   * File upload
+   * ---------------------------------------------------------
+   */
+
+  async function handleFiles(
+    fileList: FileList | null
   ) {
-    setAttachments((current) =>
-      current.filter(
-        (attachment) =>
-          attachment.id !== id
-      )
-    );
-  }
+    if (!fileList) return;
 
-  async function uploadFile(
-    file: File
-  ) {
-    const temporaryId =
-      `temp-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
+    const incomingFiles =
+      Array.from(fileList);
 
-    setAttachments((current) => [
-      ...current,
-      {
-        id: temporaryId,
-        name: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        status: 'uploading'
-      }
-    ]);
+    for (const file of incomingFiles) {
+      const temporaryId =
+        `temp-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
 
-    setUploadingCount(
-      (current) => current + 1
-    );
+      setAttachments((previous) => [
+        ...previous,
+        {
+          id: temporaryId,
+          name: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          status: 'uploading'
+        }
+      ]);
 
-    try {
       const formData =
         new FormData();
 
@@ -327,172 +313,113 @@ export function ChatComposer({
         );
       }
 
-      const response =
-        await fetch(
-          '/api/files/upload',
-          {
-            method: 'POST',
-            body: formData
-          }
+      try {
+        const response =
+          await fetch(
+            '/api/files/upload',
+            {
+              method: 'POST',
+              body: formData
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (!response.ok) {
+          setAttachments(
+            (previous) =>
+              previous.map(
+                (attachment) =>
+                  attachment.id ===
+                  temporaryId
+                    ? {
+                        ...attachment,
+                        status: 'error',
+                        error:
+                          data.error ??
+                          'Upload failed'
+                      }
+                    : attachment
+              )
+          );
+
+          continue;
+        }
+
+        const uploadedFile =
+          data.file;
+
+        setAttachments(
+          (previous) =>
+            previous.map(
+              (attachment) =>
+                attachment.id ===
+                temporaryId
+                  ? {
+                      ...attachment,
+                      id: uploadedFile.id,
+                      mimeType:
+                        uploadedFile.mimeType,
+                      sizeBytes:
+                        uploadedFile.sizeBytes,
+                      status:
+                        uploadedFile.status,
+                      error:
+                        data.note
+                    }
+                  : attachment
+            )
         );
-
-      const data =
-        await response
-          .json()
-          .catch(() => null);
-
-      if (!response.ok) {
-        setAttachments((current) =>
-          current.map(
-            (attachment) =>
-              attachment.id ===
-              temporaryId
-                ? {
-                    ...attachment,
-                    status: 'error',
-                    error:
-                      data?.error ||
-                      'Upload failed.'
-                  }
-                : attachment
-          )
+      } catch {
+        setAttachments(
+          (previous) =>
+            previous.map(
+              (attachment) =>
+                attachment.id ===
+                temporaryId
+                  ? {
+                      ...attachment,
+                      status: 'error',
+                      error:
+                        'Network error'
+                    }
+                  : attachment
+            )
         );
-
-        return;
       }
+    }
 
-      const uploadedFile =
-        data?.file;
-
-      if (
-        !uploadedFile ||
-        typeof uploadedFile.id !==
-          'string'
-      ) {
-        setAttachments((current) =>
-          current.map(
-            (attachment) =>
-              attachment.id ===
-              temporaryId
-                ? {
-                    ...attachment,
-                    status: 'error',
-                    error:
-                      'Invalid upload response.'
-                  }
-                : attachment
-          )
-        );
-
-        return;
-      }
-
-      const serverStatus =
-        uploadedFile.status;
-
-      const status: AttachmentStatus =
-        serverStatus === 'ready'
-          ? 'ready'
-          : serverStatus ===
-              'unsupported'
-            ? 'unsupported'
-            : serverStatus ===
-                'error'
-              ? 'error'
-              : 'error';
-
-      setAttachments((current) =>
-        current.map(
-          (attachment) =>
-            attachment.id ===
-            temporaryId
-              ? {
-                  ...attachment,
-                  id: uploadedFile.id,
-                  mimeType:
-                    uploadedFile.mimeType ||
-                    attachment.mimeType,
-                  sizeBytes:
-                    Number.isFinite(
-                      uploadedFile.sizeBytes
-                    )
-                      ? uploadedFile.sizeBytes
-                      : attachment.sizeBytes,
-                  status,
-                  error:
-                    data?.note ||
-                    (status === 'unsupported'
-                      ? 'This file cannot be used for text-based chat.'
-                      : status === 'error'
-                        ? 'The file could not be processed.'
-                        : undefined)
-                }
-              : attachment
-        )
-      );
-    } catch {
-      setAttachments((current) =>
-        current.map(
-          (attachment) =>
-            attachment.id ===
-            temporaryId
-              ? {
-                  ...attachment,
-                  status: 'error',
-                  error:
-                    'Network error while uploading.'
-                }
-              : attachment
-        )
-      );
-    } finally {
-      setUploadingCount(
-        (current) =>
-          Math.max(0, current - 1)
-      );
+    /*
+     * Allow selecting the same file again.
+     */
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   }
 
-  function handleFiles(
-    fileList: FileList | null
+  function removeAttachment(
+    attachmentId: string
   ) {
-    if (!fileList) {
-      return;
-    }
-
-    const files =
-      Array.from(fileList);
-
-    if (files.length === 0) {
-      return;
-    }
-
-    void Promise.all(
-      files.map((file) =>
-        uploadFile(file)
+    setAttachments((previous) =>
+      previous.filter(
+        (attachment) =>
+          attachment.id !==
+          attachmentId
       )
     );
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value =
-        '';
-    }
   }
 
-  const sendDisabled =
-    !value.trim() ||
-    isGenerating ||
-    uploadingCount > 0;
+  /*
+   * ---------------------------------------------------------
+   * UI
+   * ---------------------------------------------------------
+   */
 
   return (
     <div className="mx-auto w-full max-w-chat px-4 pb-3 pt-2 sm:pb-5">
-      <div
-        className={cn(
-          'rounded-2xl border bg-white shadow-sm transition-colors',
-          'border-slate-border focus-within:border-cobalt',
-          'dark:border-slate-border-dark dark:bg-surface-dark-raised'
-        )}
-      >
+      <div className="rounded-2xl border border-slate-border bg-white shadow-sm transition-colors focus-within:border-cobalt dark:border-slate-border-dark dark:bg-surface-dark-raised">
+
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 border-b border-slate-border px-3 pt-3 dark:border-slate-border-dark">
             {attachments.map(
@@ -500,7 +427,7 @@ export function ChatComposer({
                 <Tooltip
                   key={attachment.id}
                   content={
-                    attachment.error ||
+                    attachment.error ??
                     attachment.status
                   }
                 >
@@ -510,10 +437,7 @@ export function ChatComposer({
                       attachment.status ===
                         'error'
                         ? 'bg-red-500/10 text-red-600'
-                        : attachment.status ===
-                            'unsupported'
-                          ? 'bg-amber-500/10 text-amber-700'
-                          : 'bg-surface-light dark:bg-surface-dark'
+                        : 'bg-surface-light dark:bg-surface-dark'
                     )}
                   >
                     {attachment.status ===
@@ -546,7 +470,7 @@ export function ChatComposer({
                         )
                       }
                       aria-label={`Remove ${attachment.name}`}
-                      className="text-slate-light transition-colors hover:text-ink dark:hover:text-paper"
+                      className="text-slate-light hover:text-ink dark:hover:text-paper"
                     >
                       <X size={12} />
                     </button>
@@ -561,13 +485,13 @@ export function ChatComposer({
           ref={textareaRef}
           value={value}
           onChange={(event) =>
-            onChange(event.target.value)
+            onChange(
+              event.target.value
+            )
           }
           onKeyDown={handleKeyDown}
           placeholder="Ask anything..."
           rows={1}
-          maxLength={100000}
-          aria-label="Message"
           className="max-h-[200px] w-full resize-none bg-transparent px-4 py-3.5 text-[15px] leading-6 text-ink outline-none placeholder:text-slate-light dark:text-paper"
         />
 
@@ -590,7 +514,7 @@ export function ChatComposer({
                 <button
                   type="button"
                   aria-label="Add attachment"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate transition-colors hover:bg-surface-light dark:hover:bg-surface-dark"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate hover:bg-surface-light dark:hover:bg-surface-dark"
                 >
                   <Plus size={17} />
                 </button>
@@ -611,7 +535,9 @@ export function ChatComposer({
                 <Globe size={15} />
               }
               label="Web search"
-              active={webSearchEnabled}
+              active={
+                webSearchEnabled
+              }
               onClick={() =>
                 onWebSearchEnabledChange(
                   !webSearchEnabled
@@ -621,16 +547,15 @@ export function ChatComposer({
 
             <ToggleIconButton
               icon={
-                <Telescope
-                  size={15}
-                />
+                <Telescope size={15} />
               }
               label="Deep research"
-              active={deepResearchOn}
+              active={
+                deepResearchEnabled
+              }
               onClick={() =>
-                setDeepResearchOn(
-                  (current) =>
-                    !current
+                onDeepResearchEnabledChange(
+                  !deepResearchEnabled
                 )
               }
             />
@@ -639,7 +564,7 @@ export function ChatComposer({
               <button
                 type="button"
                 aria-label="Tools"
-                className="hidden h-8 w-8 items-center justify-center rounded-lg text-slate transition-colors hover:bg-surface-light dark:hover:bg-surface-dark sm:flex"
+                className="hidden h-8 w-8 items-center justify-center rounded-lg text-slate hover:bg-surface-light dark:hover:bg-surface-dark sm:flex"
               >
                 <Wrench size={15} />
               </button>
@@ -648,9 +573,7 @@ export function ChatComposer({
             <div className="ml-1 hidden sm:block">
               <ModelSelector
                 selected={model}
-                onSelect={
-                  onModelChange
-                }
+                onSelect={onModelChange}
               />
             </div>
           </div>
@@ -673,16 +596,11 @@ export function ChatComposer({
                 disabled={
                   !voiceSupported
                 }
-                aria-label={
-                  recording
-                    ? 'Stop voice input'
-                    : 'Start voice input'
-                }
                 aria-pressed={
                   recording
                 }
                 className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-lg text-slate transition-colors hover:bg-surface-light disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-surface-dark',
+                  'flex h-8 w-8 items-center justify-center rounded-lg text-slate hover:bg-surface-light dark:hover:bg-surface-dark disabled:opacity-40',
                   recording &&
                     'bg-red-500/10 text-red-500 hover:bg-red-500/10'
                 )}
@@ -696,7 +614,7 @@ export function ChatComposer({
                 type="button"
                 onClick={onStop}
                 aria-label="Stop generating"
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white transition-transform hover:scale-105 dark:bg-paper dark:text-ink"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-white dark:bg-paper dark:text-ink"
               >
                 <Square
                   size={13}
@@ -708,10 +626,10 @@ export function ChatComposer({
                 type="button"
                 onClick={onSend}
                 disabled={
-                  sendDisabled
+                  !value.trim()
                 }
                 aria-label="Send message"
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-cobalt text-white transition-colors hover:bg-cobalt-dim disabled:cursor-not-allowed disabled:bg-slate-border disabled:text-slate-light"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-cobalt text-white transition-colors hover:bg-cobalt-dim disabled:bg-slate-border disabled:text-slate-light"
               >
                 <ArrowUp size={16} />
               </button>
@@ -733,7 +651,7 @@ function ToggleIconButton({
   active,
   onClick
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   active: boolean;
   onClick: () => void;
@@ -743,10 +661,10 @@ function ToggleIconButton({
       <button
         type="button"
         onClick={onClick}
-        aria-label={label}
         aria-pressed={active}
+        aria-label={label}
         className={cn(
-          'flex h-8 items-center gap-1.5 rounded-lg px-2 text-slate transition-colors hover:bg-surface-light dark:hover:bg-surface-dark',
+          'flex h-8 items-center gap-1.5 rounded-lg px-2 text-slate hover:bg-surface-light dark:hover:bg-surface-dark',
           active &&
             'bg-cobalt/10 text-cobalt hover:bg-cobalt/10'
         )}
