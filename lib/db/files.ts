@@ -16,7 +16,7 @@ import {
 
 function cleanUserId(
   userId: string
-) {
+): string {
   const value =
     userId?.trim();
 
@@ -33,6 +33,7 @@ export async function createFileRecord(
   input: {
     userId: string;
     conversationId?: string;
+    projectId?: string;
     fileName: string;
     mimeType: string;
     sizeBytes: number;
@@ -45,12 +46,30 @@ export async function createFileRecord(
     await db
       .insert(files)
       .values({
-        ...input,
-        userId:
-          cleanUserId(
-            input.userId
-          ),
-        status: 'processing'
+        userId: cleanUserId(
+          input.userId
+        ),
+
+        conversationId:
+          input.conversationId,
+
+        projectId:
+          input.projectId,
+
+        fileName:
+          input.fileName,
+
+        mimeType:
+          input.mimeType,
+
+        sizeBytes:
+          input.sizeBytes,
+
+        storagePath:
+          input.storagePath,
+
+        status:
+          'processing'
       })
       .returning();
 
@@ -68,7 +87,8 @@ export async function setFileStatus(
     .update(files)
     .set({
       status,
-      errorMessage
+      errorMessage:
+        errorMessage ?? null
     })
     .where(
       eq(
@@ -87,7 +107,9 @@ export async function insertFileChunks(
 ) {
   const db = getDb();
 
-  if (chunks.length === 0) {
+  if (
+    chunks.length === 0
+  ) {
     return;
   }
 
@@ -95,11 +117,18 @@ export async function insertFileChunks(
     .insert(fileChunks)
     .values(
       chunks.map(
-        (chunk, index) => ({
+        (
+          chunk,
+          index
+        ) => ({
           fileId,
-          chunkIndex: index,
+
+          chunkIndex:
+            index,
+
           content:
             chunk.content,
+
           embedding:
             chunk.embedding
         })
@@ -122,11 +151,17 @@ export async function listFilesForConversation(
           files.conversationId,
           conversationId
         ),
+
         eq(
           files.userId,
-          cleanUserId(userId)
+          cleanUserId(
+            userId
+          )
         )
       )
+    )
+    .orderBy(
+      files.createdAt
     );
 }
 
@@ -141,7 +176,49 @@ export async function listFilesForUser(
     .where(
       eq(
         files.userId,
-        cleanUserId(userId)
+        cleanUserId(
+          userId
+        )
+      )
+    )
+    .orderBy(
+      files.createdAt
+    )
+    .limit(200);
+}
+
+export async function getFilesForUser(
+  userId: string,
+  conversationId?: string
+) {
+  const db = getDb();
+
+  const conditions = [
+    eq(
+      files.userId,
+      cleanUserId(
+        userId
+      )
+    )
+  ];
+
+  if (
+    conversationId
+  ) {
+    conditions.push(
+      eq(
+        files.conversationId,
+        conversationId
+      )
+    );
+  }
+
+  return db
+    .select()
+    .from(files)
+    .where(
+      and(
+        ...conditions
       )
     )
     .orderBy(
@@ -165,12 +242,16 @@ export async function searchSimilarChunks(
   const db = getDb();
 
   const safeUserId =
-    cleanUserId(userId);
+    cleanUserId(
+      userId
+    );
 
   const safeLimit =
     Math.min(
       Math.max(
-        Math.floor(limit),
+        Math.floor(
+          limit
+        ),
         1
       ),
       20
@@ -187,38 +268,44 @@ export async function searchSimilarChunks(
   };
 
   const result =
-    await db.execute(sql`
-      select
-        fc.id,
-        fc.file_id,
-        fc.content,
-        1 - (
+    await db.execute(
+      sql`
+        select
+          fc.id,
+          fc.file_id,
+          fc.content,
+          1 - (
+            fc.embedding
+            <=> ${vectorLiteral}::vector
+          ) as similarity
+        from file_chunks fc
+        inner join files f
+          on f.id = fc.file_id
+        where fc.file_id =
+          any(${fileIds}::uuid[])
+          and f.user_id =
+          ${safeUserId}::uuid
+        order by
           fc.embedding
           <=> ${vectorLiteral}::vector
-        ) as similarity
-      from file_chunks fc
-      inner join files f
-        on f.id = fc.file_id
-      where fc.file_id =
-        any(${fileIds}::uuid[])
-        and f.user_id =
-        ${safeUserId}::uuid
-      order by
-        fc.embedding
-        <=> ${vectorLiteral}::vector
-      limit ${safeLimit}
-    `);
+        limit ${safeLimit}
+      `
+    );
 
   const rows =
     (
-      Array.isArray(result)
+      Array.isArray(
+        result
+      )
         ? result
         : (
             result as {
               rows?: Row[];
             }
           ).rows
-    ) as Row[] | undefined;
+    ) as
+      | Row[]
+      | undefined;
 
   return rows ?? [];
 }
@@ -237,12 +324,50 @@ export async function deleteFile(
           files.id,
           fileId
         ),
+
         eq(
           files.userId,
-          cleanUserId(userId)
+          cleanUserId(
+            userId
+          )
         )
       )
     );
+}
+
+export async function deleteFileForUser(
+  fileId: string,
+  userId: string
+) {
+  const db = getDb();
+
+  const [deleted] =
+    await db
+      .delete(files)
+      .where(
+        and(
+          eq(
+            files.id,
+            fileId
+          ),
+
+          eq(
+            files.userId,
+            cleanUserId(
+              userId
+            )
+          )
+        )
+      )
+      .returning({
+        id: files.id,
+        storagePath:
+          files.storagePath
+      });
+
+  return (
+    deleted ?? null
+  );
 }
 
 export async function getFilesByIds(
@@ -266,9 +391,12 @@ export async function getFilesByIds(
           files.id,
           fileIds
         ),
+
         eq(
           files.userId,
-          cleanUserId(userId)
+          cleanUserId(
+            userId
+          )
         )
       )
     );
