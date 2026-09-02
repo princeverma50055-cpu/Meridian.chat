@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, lte } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
 
 import {
@@ -24,22 +24,17 @@ export async function GET() {
     )?.sessionId;
 
     const db = getDb();
+    const now = new Date();
 
-    // Remove expired sessions belonging to this user.
+    // Clean up expired sessions for this user.
     await db
       .delete(authSessions)
       .where(
         and(
           eq(authSessions.userId, userId),
-          // expiresAt <= now
-          // Using NOT(gt(...)) is avoided because Drizzle's
-          // expression support varies, so fetch/delete below
-          // keeps the query simple and safe.
+          lte(authSessions.expiresAt, now)
         )
-      )
-      .catch(() => {
-        // Do not fail the entire settings page if cleanup fails.
-      });
+      );
 
     const rows = await db
       .select({
@@ -54,7 +49,7 @@ export async function GET() {
       .where(
         and(
           eq(authSessions.userId, userId),
-          gt(authSessions.expiresAt, new Date())
+          gt(authSessions.expiresAt, now)
         )
       )
       .orderBy(desc(authSessions.lastSeenAt));
@@ -70,9 +65,7 @@ export async function GET() {
     }));
 
     return NextResponse.json(
-      {
-        sessions
-      },
+      { sessions },
       {
         status: 200,
         headers: {
@@ -84,9 +77,7 @@ export async function GET() {
   } catch (error) {
     if (error instanceof UnauthorizedError) {
       return NextResponse.json(
-        {
-          error: 'Authentication required'
-        },
+        { error: 'Authentication required' },
         {
           status: 401,
           headers: {
