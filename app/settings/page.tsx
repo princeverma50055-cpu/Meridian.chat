@@ -1,161 +1,371 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import {
-  useEffect,
-  useState
-} from 'react';
-import { signOut, useSession } from 'next-auth/react';
-import {
-  Download,
-  KeyRound,
-  LogOut,
+  Sun,
+  Moon,
   Monitor,
-  Save,
-  Shield,
   Trash2,
-  User
+  Download,
+  LogOut,
+  X
 } from 'lucide-react';
+import {
+  signOut,
+  useSession
+} from 'next-auth/react';
 
-type ProfileData = {
-  name: string;
-  email: string;
-  image: string;
-};
-
-type SecuritySession = {
-  id: string;
-  userAgent: string | null;
-  ipAddress: string | null;
-  createdAt: string;
-  lastSeenAt: string;
-  expiresAt: string;
-  current?: boolean;
-};
+import { AppShell } from '@/components/layout/AppShell';
+import { ChatHeader } from '@/components/chat/ChatHeader';
+import { Tabs } from '@/components/ui/Tabs';
+import {
+  SettingsRow,
+  Switch
+} from '@/components/settings/SettingsRow';
+import { Button } from '@/components/ui/Button';
+import { useTheme } from '@/components/layout/ThemeProvider';
+import { MODELS } from '@/components/chat/ModelSelector';
+import { cn } from '@/lib/utils/cn';
 
 export default function SettingsPage() {
-  const { data: session } = useSession();
+  return (
+    <AppShell>
+      <ChatHeader title="Settings" />
 
-  const [profile, setProfile] =
-    useState<ProfileData>({
-      name: '',
-      email: '',
-      image: ''
-    });
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+        <div className="mx-auto max-w-2xl">
+          <Tabs
+            defaultTab="general"
+            tabs={[
+              {
+                id: 'general',
+                label: 'General',
+                content: <General />
+              },
+              {
+                id: 'appearance',
+                label: 'Appearance',
+                content: <Appearance />
+              },
+              {
+                id: 'ai',
+                label: 'AI',
+                content: <AI />
+              },
+              {
+                id: 'privacy',
+                label: 'Privacy',
+                content: <Privacy />
+              },
+              {
+                id: 'security',
+                label: 'Security',
+                content: <Security />
+              }
+            ]}
+          />
+        </div>
+      </div>
+    </AppShell>
+  );
+}
 
-  const [password, setPassword] =
-    useState({
-      currentPassword: '',
-      newPassword: '',
-      confirmPassword: ''
-    });
+function Card({
+  children
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-border bg-white px-4 dark:border-slate-border-dark dark:bg-surface-dark-raised">
+      {children}
+    </div>
+  );
+}
 
-  const [sessions, setSessions] =
-    useState<SecuritySession[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [savingProfile, setSavingProfile] =
-    useState(false);
-
-  const [changingPassword, setChangingPassword] =
-    useState(false);
-
-  const [loadingSessions, setLoadingSessions] =
-    useState(false);
-
-  const [message, setMessage] =
-    useState('');
-
-  const [error, setError] =
-    useState('');
-
-  const [deletingAccount, setDeletingAccount] =
-    useState(false);
-
-  const [loggingOut, setLoggingOut] =
-    useState(false);
+function General() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [model, setModel] = useState(
+    MODELS[0]?.id || ''
+  );
+  const [style, setStyle] = useState('balanced');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    loadSettings();
+    fetch('/api/profile', {
+      cache: 'no-store'
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        setName(d.user?.name || '');
+        setEmail(d.user?.email || '');
+
+        const p =
+          d.profile?.preferences || {};
+
+        setModel(
+          p.defaultModel ||
+            MODELS[0]?.id ||
+            ''
+        );
+
+        setStyle(
+          p.responseStyle || 'balanced'
+        );
+      })
+      .catch((error) => {
+        console.error(
+          'Failed to load profile:',
+          error
+        );
+      });
   }, []);
 
-  const loadSettings = async () => {
+  async function save() {
+    setBusy(true);
+
     try {
-      setLoading(true);
-      setError('');
+      const r = await fetch('/api/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        cache: 'no-store',
+        body: JSON.stringify({
+          name,
+          preferences: {
+            defaultModel: model,
+            responseStyle: style
+          }
+        })
+      });
 
-      const [profileResponse, sessionsResponse] =
-        await Promise.all([
-          fetch('/api/profile', {
-            cache: 'no-store'
-          }),
-          fetch('/api/security/sessions', {
-            cache: 'no-store'
-          })
-        ]);
+      const d = await r.json().catch(() => ({}));
 
-      if (profileResponse.ok) {
-        const data =
-          await profileResponse.json();
-
-        setProfile({
-          name: data?.profile?.name ??
-            session?.user?.name ??
-            '',
-          email: data?.profile?.email ??
-            session?.user?.email ??
-            '',
-          image: data?.profile?.image ??
-            session?.user?.image ??
-            ''
-        });
-      } else {
-        setProfile({
-          name:
-            session?.user?.name ?? '',
-          email:
-            session?.user?.email ?? '',
-          image:
-            session?.user?.image ?? ''
-        });
-      }
-
-      if (sessionsResponse.ok) {
-        const data =
-          await sessionsResponse.json();
-
-        setSessions(
-          Array.isArray(data?.sessions)
-            ? data.sessions
-            : []
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Failed to save settings.'
         );
+        return;
       }
-    } catch (err) {
+
+      alert('Settings saved.');
+    } catch (error) {
       console.error(
-        '[settings] Failed to load settings:',
-        err
+        'Settings save error:',
+        error
       );
 
-      setError(
-        'Unable to load your settings.'
+      alert(
+        'Network error. Please try again.'
       );
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  };
+  }
 
-  const saveProfile = async () => {
-    if (savingProfile) {
-      return;
-    }
+  return (
+    <Card>
+      <SettingsRow
+        label="Name"
+        description={email}
+      >
+        <input
+          value={name}
+          onChange={(e) =>
+            setName(e.target.value)
+          }
+          maxLength={80}
+          className="w-40 rounded-lg border border-slate-border bg-transparent px-2.5 py-1.5 text-sm dark:border-slate-border-dark"
+        />
+      </SettingsRow>
 
+      <SettingsRow
+        label="Default model"
+        description="Used for new conversations"
+      >
+        <select
+          value={model}
+          onChange={(e) =>
+            setModel(e.target.value)
+          }
+          className="rounded-lg border border-slate-border bg-transparent px-2.5 py-1.5 text-sm dark:border-slate-border-dark"
+        >
+          {MODELS.map((m) => (
+            <option
+              key={m.id}
+              value={m.id}
+            >
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </SettingsRow>
+
+      <SettingsRow
+        label="Response style"
+        description="How Meridian formats replies"
+      >
+        <select
+          value={style}
+          onChange={(e) =>
+            setStyle(e.target.value)
+          }
+          className="rounded-lg border border-slate-border bg-transparent px-2.5 py-1.5 text-sm dark:border-slate-border-dark"
+        >
+          <option value="balanced">
+            Balanced
+          </option>
+
+          <option value="concise">
+            Concise
+          </option>
+
+          <option value="detailed">
+            Detailed
+          </option>
+        </select>
+      </SettingsRow>
+
+      <div className="flex justify-end py-4">
+        <Button
+          size="sm"
+          onClick={save}
+          disabled={busy}
+        >
+          {busy
+            ? 'Saving…'
+            : 'Save changes'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function Appearance() {
+  const {
+    theme,
+    setTheme
+  } = useTheme();
+
+  return (
+    <Card>
+      <div className="py-4">
+        <p className="mb-3 text-sm font-medium">
+          Theme
+        </p>
+
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            {
+              id: 'light',
+              label: 'Light',
+              icon: Sun
+            },
+            {
+              id: 'dark',
+              label: 'Dark',
+              icon: Moon
+            },
+            {
+              id: 'system',
+              label: 'System',
+              icon: Monitor
+            }
+          ].map(
+            ({
+              id,
+              label,
+              icon: Icon
+            }) => (
+              <button
+                key={id}
+                onClick={() =>
+                  setTheme(id as any)
+                }
+                className={cn(
+                  'flex flex-col items-center gap-2 rounded-xl border px-3 py-4 text-xs font-medium',
+                  theme === id
+                    ? 'border-cobalt bg-cobalt/5 text-cobalt'
+                    : 'border-slate-border text-slate dark:border-slate-border-dark'
+                )}
+              >
+                <Icon size={18} />
+                {label}
+              </button>
+            )
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AI() {
+  const [memory, setMemory] =
+    useState(true);
+
+  const [web, setWeb] =
+    useState(false);
+
+  const [memories, setMemories] =
+    useState<any[]>([]);
+
+  const [newMemory, setNewMemory] =
+    useState('');
+
+  async function load() {
     try {
-      setSavingProfile(true);
-      setMessage('');
-      setError('');
+      const [
+        profileResponse,
+        memoriesResponse
+      ] = await Promise.all([
+        fetch('/api/profile', {
+          cache: 'no-store'
+        }),
+        fetch('/api/memories', {
+          cache: 'no-store'
+        })
+      ]);
 
-      const response = await fetch(
+      const profileData =
+        await profileResponse.json();
+
+      const memoriesData =
+        await memoriesResponse.json();
+
+      setMemory(
+        profileData.profile?.preferences
+          ?.memoryEnabled !== false
+      );
+
+      setWeb(
+        profileData.profile?.preferences
+          ?.webSearchDefault === true
+      );
+
+      setMemories(
+        memoriesData.memories || []
+      );
+    } catch (error) {
+      console.error(
+        'Failed to load AI settings:',
+        error
+      );
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save(
+    key: string,
+    value: boolean
+  ) {
+    try {
+      const r = await fetch(
         '/api/profile',
         {
           method: 'PATCH',
@@ -164,87 +374,50 @@ export default function SettingsPage() {
               'application/json'
           },
           body: JSON.stringify({
-            name: profile.name.trim(),
-            image: profile.image.trim()
+            preferences: {
+              [key]: value
+            }
           })
         }
       );
 
-      const data =
-        await response.json().catch(
-          () => ({})
+      if (!r.ok) {
+        const d = await r
+          .json()
+          .catch(() => ({}));
+
+        alert(
+          d.error ||
+            'Failed to save preference.'
         );
 
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to update profile.'
-        );
+        return;
       }
 
-      setMessage(
-        'Profile updated successfully.'
-      );
-    } catch (err) {
+      await load();
+    } catch (error) {
       console.error(
-        '[settings] Profile update failed:',
-        err
+        'AI setting update error:',
+        error
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to update profile.'
+      alert(
+        'Network error. Please try again.'
       );
-    } finally {
-      setSavingProfile(false);
     }
-  };
+  }
 
-  const changePassword = async () => {
-    if (changingPassword) {
-      return;
-    }
+  async function add() {
+    const content =
+      newMemory.trim();
 
-    if (
-      !password.currentPassword ||
-      !password.newPassword ||
-      !password.confirmPassword
-    ) {
-      setError(
-        'Please fill in all password fields.'
-      );
-      setMessage('');
-      return;
-    }
-
-    if (
-      password.newPassword !==
-      password.confirmPassword
-    ) {
-      setError(
-        'New passwords do not match.'
-      );
-      setMessage('');
-      return;
-    }
-
-    if (password.newPassword.length < 8) {
-      setError(
-        'New password must be at least 8 characters.'
-      );
-      setMessage('');
+    if (!content) {
       return;
     }
 
     try {
-      setChangingPassword(true);
-      setMessage('');
-      setError('');
-
-      const response = await fetch(
-        '/api/account/password',
+      const r = await fetch(
+        '/api/memories',
         {
           method: 'POST',
           headers: {
@@ -252,679 +425,647 @@ export default function SettingsPage() {
               'application/json'
           },
           body: JSON.stringify({
-            currentPassword:
-              password.currentPassword,
-            newPassword:
-              password.newPassword
+            content
           })
         }
       );
 
-      const data =
-        await response.json().catch(
-          () => ({})
-        );
+      const d = await r
+        .json()
+        .catch(() => ({}));
 
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to change password.'
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Failed to save memory.'
         );
+        return;
       }
 
-      setPassword({
-        currentPassword: '',
-        newPassword: '',
-        confirmPassword: ''
-      });
-
-      setMessage(
-        'Password changed successfully.'
-      );
-    } catch (err) {
+      setNewMemory('');
+      await load();
+    } catch (error) {
       console.error(
-        '[settings] Password change failed:',
-        err
+        'Memory creation error:',
+        error
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to change password.'
+      alert(
+        'Network error. Please try again.'
       );
-    } finally {
-      setChangingPassword(false);
     }
-  };
+  }
 
-  const loadSessions = async () => {
+  async function removeMemory(
+    id: string
+  ) {
     try {
-      setLoadingSessions(true);
-
-      const response = await fetch(
-        '/api/security/sessions',
-        {
-          cache: 'no-store'
-        }
-      );
-
-      const data =
-        await response.json().catch(
-          () => ({})
-        );
-
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to load sessions.'
-        );
-      }
-
-      setSessions(
-        Array.isArray(data?.sessions)
-          ? data.sessions
-          : []
-      );
-    } catch (err) {
-      console.error(
-        '[settings] Session loading failed:',
-        err
-      );
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to load sessions.'
-      );
-    } finally {
-      setLoadingSessions(false);
-    }
-  };
-
-  const revokeSession = async (
-    sessionId: string
-  ) => {
-    if (!sessionId) {
-      return;
-    }
-
-    try {
-      setError('');
-      setMessage('');
-
-      const response = await fetch(
-        `/api/security/sessions/${sessionId}`,
+      const r = await fetch(
+        '/api/memories/' + id,
         {
           method: 'DELETE'
         }
       );
 
-      const data =
-        await response.json().catch(
-          () => ({})
+      if (!r.ok) {
+        const d = await r
+          .json()
+          .catch(() => ({}));
+
+        alert(
+          d.error ||
+            'Failed to delete memory.'
         );
 
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to revoke session.'
-        );
+        return;
       }
 
-      setSessions((current) =>
-        current.filter(
-          (item) =>
-            item.id !== sessionId
-        )
-      );
-
-      setMessage(
-        'Session revoked successfully.'
-      );
-    } catch (err) {
+      await load();
+    } catch (error) {
       console.error(
-        '[settings] Session revoke failed:',
-        err
+        'Memory deletion error:',
+        error
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to revoke session.'
+      alert(
+        'Network error. Please try again.'
       );
     }
-  };
+  }
 
-  const exportAccount = async () => {
+  return (
+    <Card>
+      <SettingsRow
+        label="Memory"
+        description="Remember useful details across chats"
+      >
+        <Switch
+          checked={memory}
+          onChange={(value) =>
+            save(
+              'memoryEnabled',
+              value
+            )
+          }
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Web search by default"
+        description="Allow search automatically when enabled by the assistant"
+      >
+        <Switch
+          checked={web}
+          onChange={(value) =>
+            save(
+              'webSearchDefault',
+              value
+            )
+          }
+        />
+      </SettingsRow>
+
+      <div className="border-t border-slate-border py-4 dark:border-slate-border-dark">
+        <p className="mb-3 text-sm font-medium">
+          Saved memories
+        </p>
+
+        <div className="mb-4 flex gap-2">
+          <input
+            value={newMemory}
+            onChange={(e) =>
+              setNewMemory(
+                e.target.value
+              )
+            }
+            maxLength={1000}
+            placeholder="Add something Meridian should remember…"
+            className="min-w-0 flex-1 rounded-xl border border-slate-border bg-transparent px-3 py-2 text-sm dark:border-slate-border-dark"
+          />
+
+          <Button
+            size="sm"
+            onClick={add}
+            disabled={
+              !newMemory.trim()
+            }
+          >
+            Add
+          </Button>
+        </div>
+
+        {memories.length === 0 ? (
+          <p className="text-sm text-slate">
+            No saved memories.
+          </p>
+        ) : (
+          memories.map((m) => (
+            <div
+              key={m.id}
+              className="mb-2 flex items-start justify-between gap-3 rounded-xl bg-surface-light p-3 text-sm dark:bg-surface-dark"
+            >
+              <span className="break-words">
+                {m.content}
+              </span>
+
+              <button
+                type="button"
+                onClick={() =>
+                  removeMemory(m.id)
+                }
+                aria-label="Delete memory"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Privacy() {
+  const [busy, setBusy] =
+    useState(false);
+
+  async function exportData() {
+    window.location.href =
+      '/api/account/export';
+  }
+
+  async function clear() {
+    if (
+      !confirm(
+        'Delete all conversations? This cannot be undone.'
+      )
+    ) {
+      return;
+    }
+
+    setBusy(true);
+
     try {
-      setError('');
-      setMessage('');
-
-      const response = await fetch(
-        '/api/account/export',
+      const r = await fetch(
+        '/api/conversations/all',
         {
-          method: 'GET'
+          method: 'DELETE'
         }
       );
 
-      if (!response.ok) {
-        const data =
-          await response.json().catch(
-            () => ({})
-          );
+      const d = await r
+        .json()
+        .catch(() => ({}));
 
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to export account data.'
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Failed to delete conversations.'
         );
+        return;
       }
 
-      const blob =
-        await response.blob();
-
-      const url =
-        URL.createObjectURL(blob);
-
-      const anchor =
-        document.createElement('a');
-
-      anchor.href = url;
-      anchor.download =
-        `meridian-ai-account-${new Date()
-          .toISOString()
-          .slice(0, 10)}.json`;
-
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-
-      URL.revokeObjectURL(url);
-
-      setMessage(
-        'Your account data has been exported.'
+      alert(
+        'All conversations deleted.'
       );
-    } catch (err) {
+    } catch (error) {
       console.error(
-        '[settings] Account export failed:',
-        err
+        'Delete conversations error:',
+        error
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to export account data.'
+      alert(
+        'Network error. Please try again.'
       );
+    } finally {
+      setBusy(false);
     }
-  };
+  }
 
-  const deleteAccount = async () => {
-    if (deletingAccount) {
+  async function account() {
+    if (
+      !confirm(
+        'Permanently delete your Meridian account and all data?'
+      )
+    ) {
       return;
     }
 
-    const confirmed =
-      window.confirm(
-        'Are you sure you want to permanently delete your Meridian AI account? This action cannot be undone.'
-      );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const secondConfirmation =
-      window.confirm(
-        'This will permanently delete your account and associated data. Continue?'
-      );
-
-    if (!secondConfirmation) {
-      return;
-    }
+    setBusy(true);
 
     try {
-      setDeletingAccount(true);
-      setError('');
-
-      const response = await fetch(
+      const r = await fetch(
         '/api/account/delete',
         {
           method: 'DELETE'
         }
       );
 
-      const data =
-        await response.json().catch(
-          () => ({})
-        );
+      const d = await r
+        .json()
+        .catch(() => ({}));
 
-      if (!response.ok) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            'Unable to delete account.'
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Failed to delete account.'
         );
+        return;
       }
 
       await signOut({
         callbackUrl: '/login'
       });
-    } catch (err) {
+    } catch (error) {
       console.error(
-        '[settings] Account deletion failed:',
-        err
+        'Account deletion error:',
+        error
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Unable to delete account.'
+      alert(
+        'Network error. Please try again.'
       );
-
-      setDeletingAccount(false);
+    } finally {
+      setBusy(false);
     }
-  };
-
-  const logout = async () => {
-    if (loggingOut) {
-      return;
-    }
-
-    try {
-      setLoggingOut(true);
-
-      await signOut({
-        callbackUrl: '/login'
-      });
-    } catch (err) {
-      console.error(
-        '[settings] Logout failed:',
-        err
-      );
-
-      setLoggingOut(false);
-
-      setError(
-        'Unable to log out. Please try again.'
-      );
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="h-full overflow-y-auto">
-        <div className="mx-auto max-w-4xl px-5 py-8 md:px-8">
-          <div className="animate-pulse">
-            <div className="h-8 w-32 rounded-lg bg-zinc-200 dark:bg-zinc-800" />
-            <div className="mt-3 h-4 w-64 rounded bg-zinc-200 dark:bg-zinc-800" />
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-5 py-8 md:px-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Settings
-          </h1>
+    <Card>
+      <SettingsRow
+        label="Export your data"
+        description="Download conversations, files metadata and memories"
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={exportData}
+        >
+          <Download size={14} />
+          Export
+        </Button>
+      </SettingsRow>
 
-          <p className="mt-1 text-sm text-zinc-500">
-            Manage your Meridian AI account,
-            security and data.
-          </p>
-        </div>
+      <SettingsRow
+        label="Delete all conversations"
+        description="Permanently delete every conversation"
+      >
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={busy}
+          onClick={clear}
+        >
+          <Trash2 size={14} />
+          Delete all
+        </Button>
+      </SettingsRow>
 
-        {message && (
-          <div className="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300">
-            {message}
-          </div>
-        )}
+      <SettingsRow
+        label="Delete account"
+        description="Permanently remove your account and all related data"
+      >
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={busy}
+          onClick={account}
+        >
+          <Trash2 size={14} />
+          Delete account
+        </Button>
+      </SettingsRow>
+    </Card>
+  );
+}
 
-        {error && (
-          <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-            {error}
-          </div>
-        )}
+function PasswordChange() {
+  const [current, setCurrent] =
+    useState('');
 
-        <section className="mb-6 rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-            <div className="flex items-center gap-3">
-              <User size={19} />
-              <div>
-                <h2 className="font-semibold">
-                  Profile
-                </h2>
-                <p className="text-sm text-zinc-500">
-                  Update your account information.
-                </p>
-              </div>
-            </div>
-          </div>
+  const [next, setNext] =
+    useState('');
 
-          <div className="space-y-5 p-5">
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Name
-              </label>
+  const [busy, setBusy] =
+    useState(false);
 
-              <input
-                value={profile.name}
-                onChange={(event) =>
-                  setProfile((current) => ({
-                    ...current,
-                    name: event.target.value
-                  }))
-                }
-                className="w-full rounded-xl border border-zinc-300 bg-transparent px-4 py-2.5 text-sm outline-none transition focus:border-zinc-500 dark:border-zinc-700"
-                placeholder="Your name"
-              />
-            </div>
+  async function save() {
+    if (next.length < 8) {
+      alert(
+        'New password must be at least 8 characters.'
+      );
+      return;
+    }
 
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Email
-              </label>
+    if (next.length > 128) {
+      alert(
+        'New password must be 128 characters or fewer.'
+      );
+      return;
+    }
 
-              <input
-                value={profile.email}
-                disabled
-                className="w-full cursor-not-allowed rounded-xl border border-zinc-200 bg-zinc-100 px-4 py-2.5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900"
-              />
-            </div>
+    setBusy(true);
 
-            <div>
-              <label className="mb-2 block text-sm font-medium">
-                Profile image URL
-              </label>
+    try {
+      const r = await fetch(
+        '/api/account/password',
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+          cache: 'no-store',
+          body: JSON.stringify({
+            currentPassword: current,
+            newPassword: next
+          })
+        }
+      );
 
-              <input
-                value={profile.image}
-                onChange={(event) =>
-                  setProfile((current) => ({
-                    ...current,
-                    image: event.target.value
-                  }))
-                }
-                className="w-full rounded-xl border border-zinc-300 bg-transparent px-4 py-2.5 text-sm outline-none transition focus:border-zinc-500 dark:border-zinc-700"
-                placeholder="https://..."
-              />
-            </div>
+      const d: {
+        error?: string;
+        message?: string;
+      } = await r
+        .json()
+        .catch(() => ({}));
 
-            <button
-              type="button"
-              disabled={savingProfile}
-              onClick={saveProfile}
-              className="inline-flex items-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50 dark:bg-white dark:text-black"
-            >
-              <Save size={16} />
-              {savingProfile
-                ? 'Saving...'
-                : 'Save profile'}
-            </button>
-          </div>
-        </section>
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Password update failed. Please try again.'
+        );
+        return;
+      }
 
-        <section className="mb-6 rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-            <div className="flex items-center gap-3">
-              <KeyRound size={19} />
-              <div>
-                <h2 className="font-semibold">
-                  Password
-                </h2>
-                <p className="text-sm text-zinc-500">
-                  Change your Meridian AI password.
-                </p>
-              </div>
-            </div>
-          </div>
+      setCurrent('');
+      setNext('');
 
-          <div className="space-y-5 p-5">
-            <PasswordInput
-              label="Current password"
-              value={
-                password.currentPassword
-              }
-              onChange={(value) =>
-                setPassword((current) => ({
-                  ...current,
-                  currentPassword: value
-                }))
-              }
-            />
+      alert(
+        d.message ||
+          'Password updated successfully.'
+      );
+    } catch (error) {
+      console.error(
+        'Password update request failed:',
+        error
+      );
 
-            <PasswordInput
-              label="New password"
-              value={password.newPassword}
-              onChange={(value) =>
-                setPassword((current) => ({
-                  ...current,
-                  newPassword: value
-                }))
-              }
-            />
+      alert(
+        'Network error. Please try again.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
-            <PasswordInput
-              label="Confirm new password"
-              value={
-                password.confirmPassword
-              }
-              onChange={(value) =>
-                setPassword((current) => ({
-                  ...current,
-                  confirmPassword: value
-                }))
-              }
-            />
+  return (
+    <div className="border-y border-slate-border py-4 dark:border-slate-border-dark">
+      <p className="mb-1 text-sm font-medium">
+        Password
+      </p>
 
-            <button
-              type="button"
-              disabled={changingPassword}
-              onClick={changePassword}
-              className="inline-flex items-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50 dark:bg-white dark:text-black"
-            >
-              <Shield size={16} />
-              {changingPassword
-                ? 'Changing...'
-                : 'Change password'}
-            </button>
-          </div>
-        </section>
+      <p className="mb-3 text-xs text-slate">
+        Set or change your email/password sign-in
+        password.
+      </p>
 
-        <section className="mb-6 rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-            <div className="flex items-center gap-3">
-              <Monitor size={19} />
-              <div>
-                <h2 className="font-semibold">
-                  Active sessions
-                </h2>
-                <p className="text-sm text-zinc-500">
-                  Manage devices currently signed in.
-                </p>
-              </div>
-            </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={current}
+          onChange={(e) =>
+            setCurrent(e.target.value)
+          }
+          placeholder="Current password (if set)"
+          className="rounded-xl border border-slate-border bg-transparent px-3 py-2 text-sm dark:border-slate-border-dark"
+        />
 
-            <button
-              type="button"
-              disabled={loadingSessions}
-              onClick={loadSessions}
-              className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-medium transition hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              {loadingSessions
-                ? 'Refreshing...'
-                : 'Refresh'}
-            </button>
-          </div>
+        <input
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          maxLength={128}
+          value={next}
+          onChange={(e) =>
+            setNext(e.target.value)
+          }
+          placeholder="New password (8+ characters)"
+          className="rounded-xl border border-slate-border bg-transparent px-3 py-2 text-sm dark:border-slate-border-dark"
+        />
+      </div>
 
-          <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {sessions.length === 0 ? (
-              <div className="p-5 text-sm text-zinc-500">
-                No active sessions found.
-              </div>
-            ) : (
-              sessions.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">
-                      {item.current
-                        ? 'Current session'
-                        : 'Signed-in session'}
-                    </p>
-
-                    <p className="mt-1 break-all text-xs text-zinc-500">
-                      {item.userAgent ||
-                        'Unknown device'}
-                    </p>
-
-                    {item.ipAddress && (
-                      <p className="mt-1 text-xs text-zinc-500">
-                        IP: {item.ipAddress}
-                      </p>
-                    )}
-                  </div>
-
-                  {!item.current && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        revokeSession(
-                          item.id
-                        )
-                      }
-                      className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-950/30"
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="mb-6 rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-            <h2 className="font-semibold">
-              Your data
-            </h2>
-
-            <p className="mt-1 text-sm text-zinc-500">
-              Download a copy of your Meridian AI
-              account data.
-            </p>
-          </div>
-
-          <div className="p-5">
-            <button
-              type="button"
-              onClick={exportAccount}
-              className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 px-4 py-2.5 text-sm font-medium transition hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              <Download size={16} />
-              Export account data
-            </button>
-          </div>
-        </section>
-
-        <section className="mb-6 rounded-2xl border border-red-200 bg-white dark:border-red-950 dark:bg-zinc-950">
-          <div className="border-b border-red-200 px-5 py-5 dark:border-red-950">
-            <div className="flex items-center gap-3">
-              <Trash2
-                size={19}
-                className="text-red-600"
-              />
-
-              <div>
-                <h2 className="font-semibold text-red-600">
-                  Danger zone
-                </h2>
-
-                <p className="text-sm text-zinc-500">
-                  Permanently delete your account and
-                  associated data.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-medium">
-                Delete account
-              </p>
-
-              <p className="mt-1 text-xs text-zinc-500">
-                This action cannot be undone.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              disabled={deletingAccount}
-              onClick={deleteAccount}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 disabled:opacity-50"
-            >
-              <Trash2 size={16} />
-              {deletingAccount
-                ? 'Deleting...'
-                : 'Delete account'}
-            </button>
-          </div>
-        </section>
-
-        <section className="pb-10">
-          <button
-            type="button"
-            disabled={loggingOut}
-            onClick={logout}
-            className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
-          >
-            <LogOut size={16} />
-            {loggingOut
-              ? 'Logging out...'
-              : 'Log out'}
-          </button>
-        </section>
+      <div className="mt-2 flex justify-end">
+        <Button
+          size="sm"
+          onClick={save}
+          disabled={
+            busy ||
+            next.length < 8
+          }
+        >
+          {busy
+            ? 'Saving…'
+            : 'Save password'}
+        </Button>
       </div>
     </div>
   );
 }
 
-interface PasswordInputProps {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}
+function Security() {
+  const {
+    data: session
+  } = useSession();
 
-function PasswordInput({
-  label,
-  value,
-  onChange
-}: PasswordInputProps) {
-  return (
-    <div>
-      <label className="mb-2 block text-sm font-medium">
-        {label}
-      </label>
+  const [sessions, setSessions] =
+    useState<any[]>([]);
 
-      <input
-        type="password"
-        value={value}
-        onChange={(event) =>
-          onChange(event.target.value)
+  const [loading, setLoading] =
+    useState(false);
+
+  async function load() {
+    setLoading(true);
+
+    try {
+      const r = await fetch(
+        '/api/security/sessions',
+        {
+          cache: 'no-store'
         }
-        autoComplete="new-password"
-        className="w-full rounded-xl border border-zinc-300 bg-transparent px-4 py-2.5 text-sm outline-none transition focus:border-zinc-500 dark:border-zinc-700"
-      />
-    </div>
+      );
+
+      const d = await r
+        .json()
+        .catch(() => ({}));
+
+      if (!r.ok) {
+        console.error(
+          'Failed to load sessions:',
+          d.error
+        );
+
+        setSessions([]);
+        return;
+      }
+
+      setSessions(
+        d.sessions || []
+      );
+    } catch (error) {
+      console.error(
+        'Sessions loading error:',
+        error
+      );
+
+      setSessions([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function revokeSession(
+    id: string
+  ) {
+    try {
+      const r = await fetch(
+        '/api/security/sessions/' +
+          id,
+        {
+          method: 'DELETE'
+        }
+      );
+
+      const d = await r
+        .json()
+        .catch(() => ({}));
+
+      if (!r.ok) {
+        alert(
+          d.error ||
+            'Failed to revoke session.'
+        );
+        return;
+      }
+
+      await load();
+    } catch (error) {
+      console.error(
+        'Session revoke error:',
+        error
+      );
+
+      alert(
+        'Network error. Please try again.'
+      );
+    }
+  }
+
+  return (
+    <Card>
+      <SettingsRow
+        label="Current account"
+        description={
+          session?.user?.email || ''
+        }
+      >
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            signOut({
+              callbackUrl: '/login'
+            })
+          }
+        >
+          <LogOut size={14} />
+          Log out
+        </Button>
+      </SettingsRow>
+
+      <PasswordChange />
+
+      <SettingsRow
+        label="Active sessions"
+        description="Revoke sessions that are no longer trusted"
+      >
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={load}
+          disabled={loading}
+        >
+          {loading
+            ? 'Refreshing…'
+            : 'Refresh'}
+        </Button>
+      </SettingsRow>
+
+      <div className="border-t border-slate-border py-4 dark:border-slate-border-dark">
+        {sessions.length === 0 ? (
+          <p className="text-sm text-slate">
+            No active sessions found.
+          </p>
+        ) : (
+          sessions.map((s) => (
+            <div
+              key={s.id}
+              className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-surface-light p-3 text-sm dark:bg-surface-dark"
+            >
+              <div className="min-w-0">
+                <div className="font-medium">
+                  {s.current
+                    ? 'This device'
+                    : 'Signed-in device'}
+                </div>
+
+                <div className="text-xs text-slate">
+                  Last active{' '}
+                  {new Date(
+                    s.lastSeenAt
+                  ).toLocaleString()}
+                </div>
+
+                {s.userAgent && (
+                  <div className="mt-1 truncate text-xs text-slate">
+                    {s.userAgent}
+                  </div>
+                )}
+              </div>
+
+              {!s.current && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    revokeSession(
+                      s.id
+                    )
+                  }
+                  className="shrink-0 text-xs text-red-600 hover:underline"
+                >
+                  Revoke
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <SettingsRow
+        label="Connected accounts"
+        description="Google and email/password are supported"
+      >
+        <span className="text-sm text-slate">
+          {session?.user?.email
+            ? 'Connected'
+            : '—'}
+        </span>
+      </SettingsRow>
+    </Card>
   );
 }
