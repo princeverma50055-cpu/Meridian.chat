@@ -4,17 +4,19 @@ import {
   Menu,
   X
 } from 'lucide-react';
+
 import {
   useState,
   type ReactNode
 } from 'react';
+
 import Sidebar from '@/components/layout/Sidebar';
 
 interface AppShellProps {
   children: ReactNode;
 }
 
-export default function AppShell({
+export function AppShell({
   children
 }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] =
@@ -94,3 +96,5 @@ export default function AppShell({
     </div>
   );
 }
+
+export default AppShell;
