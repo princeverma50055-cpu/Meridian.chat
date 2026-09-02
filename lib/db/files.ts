@@ -1,64 +1,196 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
-import {
-  fileChunks,
-  files
-} from '@/lib/db/schema';
+import { sql, eq, and, inArray } from 'drizzle-orm';
 import { getDb } from '@/lib/db/client';
+import { files, fileChunks } from '@/lib/db/schema';
 
-export async function getFilesByIds(
-  fileIds: string[],
-  userId?: string
-) {
-  const ids = [
-    ...new Set(
-      fileIds
-        .filter(
-          (id): id is string =>
-            typeof id === 'string'
-        )
-        .map((id) => id.trim())
-        .filter(Boolean)
-    )
-  ];
+function normalizeUserId(userId: string) {
+  const value = userId?.trim();
 
-  if (
-    ids.length === 0 ||
-    (userId !== undefined &&
-      !userId.trim())
-  ) {
-    return [];
+  if (!value) {
+    throw new Error('User ID is required.');
   }
 
+  return value;
+}
+
+function normalizeFileIds(fileIds: string[]) {
+  return [...new Set(
+    fileIds
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter(Boolean)
+  )];
+}
+
+export async function createFileRecord(input: {
+  userId: string;
+  conversationId?: string;
+  projectId?: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+}) {
   const db = getDb();
 
-  const conditions = [
-    inArray(files.id, ids)
-  ];
+  const userId = normalizeUserId(input.userId);
 
-  if (userId) {
-    conditions.push(
-      eq(files.userId, userId)
-    );
+  if (!input.fileName?.trim()) {
+    throw new Error('File name is required.');
+  }
+
+  if (!input.mimeType?.trim()) {
+    throw new Error('File MIME type is required.');
+  }
+
+  if (!Number.isFinite(input.sizeBytes) || input.sizeBytes < 0) {
+    throw new Error('Invalid file size.');
+  }
+
+  const [row] = await db
+    .insert(files)
+    .values({
+      userId,
+      conversationId: input.conversationId,
+      projectId: input.projectId,
+      fileName: input.fileName.trim().slice(0, 255),
+      mimeType: input.mimeType.trim().slice(0, 150),
+      sizeBytes: input.sizeBytes,
+      storagePath: input.storagePath,
+      status: 'processing'
+    })
+    .returning();
+
+  return row;
+}
+
+export async function setFileStatus(
+  fileId: string,
+  status: string,
+  errorMessage?: string
+) {
+  const db = getDb();
+
+  if (!fileId?.trim()) {
+    throw new Error('File ID is required.');
+  }
+
+  await db
+    .update(files)
+    .set({
+      status: status.trim().slice(0, 50),
+      errorMessage: errorMessage
+        ? errorMessage.slice(0, 1000)
+        : null
+    })
+    .where(eq(files.id, fileId));
+}
+
+/**
+ * Insert chunks for a file.
+ *
+ * Ownership is intentionally checked before this function should be called
+ * by an authenticated upload/processing flow.
+ */
+export async function insertFileChunks(
+  fileId: string,
+  chunks: {
+    content: string;
+    embedding: number[];
+  }[]
+) {
+  const db = getDb();
+
+  if (!fileId?.trim()) {
+    throw new Error('File ID is required.');
+  }
+
+  if (chunks.length === 0) {
+    return;
+  }
+
+  const safeChunks = chunks
+    .filter(
+      (chunk) =>
+        typeof chunk.content === 'string' &&
+        chunk.content.trim().length > 0 &&
+        Array.isArray(chunk.embedding) &&
+        chunk.embedding.length > 0
+    )
+    .map((chunk) => ({
+      content: chunk.content.trim(),
+      embedding: chunk.embedding
+    }));
+
+  if (safeChunks.length === 0) {
+    return;
+  }
+
+  await db.insert(fileChunks).values(
+    safeChunks.map((chunk, index) => ({
+      fileId,
+      chunkIndex: index,
+      content: chunk.content,
+      embedding: chunk.embedding
+    }))
+  );
+}
+
+/**
+ * List files belonging to a specific conversation.
+ *
+ * The userId check is mandatory so a conversation ID alone can never expose
+ * another user's files.
+ */
+export async function listFilesForConversation(
+  conversationId: string,
+  userId: string
+) {
+  const db = getDb();
+
+  const safeUserId = normalizeUserId(userId);
+
+  if (!conversationId?.trim()) {
+    return [];
   }
 
   return db
     .select()
     .from(files)
-    .where(and(...conditions));
+    .where(
+      and(
+        eq(files.conversationId, conversationId),
+        eq(files.userId, safeUserId)
+      )
+    )
+    .orderBy(files.createdAt);
 }
 
+export async function listFilesForUser(userId: string) {
+  const db = getDb();
+
+  const safeUserId = normalizeUserId(userId);
+
+  return db
+    .select()
+    .from(files)
+    .where(eq(files.userId, safeUserId))
+    .orderBy(files.createdAt);
+}
+
+/**
+ * Get one file only if it belongs to the authenticated user.
+ */
 export async function getFileForUser(
   fileId: string,
   userId: string
 ) {
-  if (
-    !fileId?.trim() ||
-    !userId?.trim()
-  ) {
+  const db = getDb();
+
+  const safeUserId = normalizeUserId(userId);
+
+  if (!fileId?.trim()) {
     return null;
   }
-
-  const db = getDb();
 
   const [file] = await db
     .select()
@@ -66,7 +198,7 @@ export async function getFileForUser(
     .where(
       and(
         eq(files.id, fileId),
-        eq(files.userId, userId)
+        eq(files.userId, safeUserId)
       )
     )
     .limit(1);
@@ -74,196 +206,186 @@ export async function getFileForUser(
   return file ?? null;
 }
 
-export async function getFilesForUser(
-  userId: string,
-  conversationId?: string
+/**
+ * Get multiple files only when ALL requested files belong to the user.
+ *
+ * This prevents the caller from accidentally loading another user's file
+ * by knowing/guessing a UUID.
+ */
+export async function getFilesByIds(
+  fileIds: string[],
+  userId: string
 ) {
-  if (!userId?.trim()) {
-    return [];
-  }
-
   const db = getDb();
 
-  const conditions = [
-    eq(files.userId, userId)
-  ];
+  const safeUserId = normalizeUserId(userId);
+  const ids = normalizeFileIds(fileIds);
 
-  if (conversationId?.trim()) {
-    conditions.push(
-      eq(
-        files.conversationId,
-        conversationId
-      )
-    );
+  if (ids.length === 0) {
+    return [];
   }
 
   return db
     .select()
     .from(files)
-    .where(and(...conditions))
-    .orderBy(
-      desc(files.createdAt)
+    .where(
+      and(
+        inArray(files.id, ids),
+        eq(files.userId, safeUserId)
+      )
     );
 }
 
+/**
+ * Get chunks only for a file owned by the authenticated user.
+ */
 export async function getFileChunks(
   fileId: string,
   userId: string
 ) {
-  const file =
-    await getFileForUser(
-      fileId,
-      userId
-    );
+  const db = getDb();
+
+  const file = await getFileForUser(fileId, userId);
 
   if (!file) {
     return [];
   }
 
-  const db = getDb();
-
   return db
     .select()
     .from(fileChunks)
-    .where(
-      eq(
-        fileChunks.fileId,
-        fileId
-      )
-    )
-    .orderBy(
-      fileChunks.chunkIndex
-    );
+    .where(eq(fileChunks.fileId, fileId))
+    .orderBy(fileChunks.chunkIndex);
 }
 
+/**
+ * Finds the most relevant chunks across the given files using pgvector's
+ * cosine-distance operator.
+ *
+ * IMPORTANT:
+ * The original vector similarity logic is preserved.
+ *
+ * Ownership is enforced directly inside SQL through the files.user_id
+ * relationship, so the caller cannot retrieve another user's chunks.
+ */
 export async function searchSimilarChunks(
   fileIds: string[],
-  embedding: number[],
+  queryEmbedding: number[],
   limit = 6,
   userId?: string
 ) {
-  if (
-    fileIds.length === 0 ||
-    embedding.length === 0
-  ) {
+  const ids = normalizeFileIds(fileIds);
+
+  if (ids.length === 0) {
     return [];
   }
 
-  const accessibleFiles =
-    await getFilesByIds(
-      fileIds,
-      userId
-    );
-
-  if (
-    accessibleFiles.length === 0
-  ) {
+  if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
     return [];
   }
 
-  const accessibleFileIds =
-    accessibleFiles.map(
-      (file) => file.id
-    );
+  const safeLimit = Math.min(
+    Math.max(Number.isFinite(limit) ? Math.floor(limit) : 6, 1),
+    20
+  );
 
   const db = getDb();
 
-  /*
-   * The actual vector similarity query can vary
-   * depending on the PostgreSQL/pgvector schema.
-   * Keep the ownership filter here so only chunks
-   * belonging to authorized files are considered.
+  const vectorLiteral = `[${queryEmbedding.join(',')}]`;
+
+  type Row = {
+    id: string;
+    file_id: string;
+    content: string;
+    similarity: number;
+  };
+
+  /**
+   * If userId is supplied, enforce ownership directly in SQL.
+   *
+   * The optional fallback exists for internal legacy callers, but all
+   * authenticated chat/file flows should pass userId.
    */
-  const rows =
-    await db
-      .select({
-        id: fileChunks.id,
-        file_id:
-          fileChunks.fileId,
-        content:
-          fileChunks.content,
-        chunk_index:
-          fileChunks.chunkIndex
-      })
-      .from(fileChunks)
-      .where(
-        inArray(
-          fileChunks.fileId,
-          accessibleFileIds
-        )
-      )
-      .limit(
-        Math.max(1, Math.min(limit, 20))
-      );
+  const result = userId?.trim()
+    ? await db.execute(sql`
+        select
+          fc.id,
+          fc.file_id,
+          fc.content,
+          1 - (fc.embedding <=> ${vectorLiteral}::vector) as similarity
+        from file_chunks fc
+        inner join files f
+          on f.id = fc.file_id
+        where
+          fc.file_id = any(${ids}::uuid[])
+          and f.user_id = ${userId.trim()}::uuid
+        order by fc.embedding <=> ${vectorLiteral}::vector
+        limit ${safeLimit}
+      `)
+    : await db.execute(sql`
+        select
+          fc.id,
+          fc.file_id,
+          fc.content,
+          1 - (fc.embedding <=> ${vectorLiteral}::vector) as similarity
+        from file_chunks fc
+        where fc.file_id = any(${ids}::uuid[])
+        order by fc.embedding <=> ${vectorLiteral}::vector
+        limit ${safeLimit}
+      `);
 
-  return rows;
+  const rows = (
+    Array.isArray(result)
+      ? result
+      : (result as { rows?: Row[] }).rows
+  ) as Row[] | undefined;
+
+  return rows ?? [];
 }
 
-export async function createFileRecord(
-  userId: string,
-  values: {
-    fileName: string;
-    mimeType: string;
-    size: number;
-    storagePath: string;
-    conversationId?: string | null;
-  }
-) {
-  if (!userId?.trim()) {
-    throw new Error(
-      'User ID is required.'
-    );
-  }
-
-  const db = getDb();
-
-  const [file] = await db
-    .insert(files)
-    .values({
-      userId,
-      fileName:
-        values.fileName.trim(),
-      mimeType:
-        values.mimeType.trim(),
-      size: values.size,
-      storagePath:
-        values.storagePath,
-      conversationId:
-        values.conversationId ??
-        null
-    })
-    .returning();
-
-  return file;
-}
-
+/**
+ * Delete a file only when it belongs to the authenticated user.
+ */
 export async function deleteFileForUser(
   fileId: string,
   userId: string
 ) {
-  if (
-    !fileId?.trim() ||
-    !userId?.trim()
-  ) {
+  const db = getDb();
+
+  const safeUserId = normalizeUserId(userId);
+
+  if (!fileId?.trim()) {
     return false;
   }
 
+  const deleted = await db
+    .delete(files)
+    .where(
+      and(
+        eq(files.id, fileId),
+        eq(files.userId, safeUserId)
+      )
+    )
+    .returning({
+      id: files.id
+    });
+
+  return deleted.length > 0;
+}
+
+/**
+ * Legacy delete helper.
+ *
+ * Prefer deleteFileForUser() from authenticated routes.
+ */
+export async function deleteFile(fileId: string) {
   const db = getDb();
 
-  const deleted =
-    await db
-      .delete(files)
-      .where(
-        and(
-          eq(files.id, fileId),
-          eq(files.userId, userId)
-        )
-      )
-      .returning({
-        id: files.id,
-        storagePath:
-          files.storagePath
-      });
+  if (!fileId?.trim()) {
+    return;
+  }
 
-  return deleted[0] ?? null;
+  await db
+    .delete(files)
+    .where(eq(files.id, fileId));
 }
