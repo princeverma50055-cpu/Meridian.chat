@@ -1,229 +1,309 @@
-import { NextRequest, NextResponse } from 'next/server';
+import {
+  NextRequest,
+  NextResponse
+} from 'next/server';
+
 import {
   getCurrentUserId,
   UnauthorizedError
 } from '@/lib/auth/currentUser';
-import { getStorageProvider } from '@/lib/storage/provider';
-import { extractText } from '@/lib/files/extract';
-import { chunkText } from '@/lib/files/chunk';
-import { getEmbeddingsProvider } from '@/lib/embeddings/provider';
+
+import {
+  getStorageProvider
+} from '@/lib/storage/provider';
+
+import {
+  extractText
+} from '@/lib/files/extract';
+
+import {
+  chunkText
+} from '@/lib/files/chunk';
+
+import {
+  getEmbeddingsProvider
+} from '@/lib/embeddings/provider';
+
 import {
   isAllowedFile,
   MAX_FILE_SIZE_BYTES
 } from '@/lib/files/validation';
+
 import {
   createFileRecord,
   insertFileChunks,
   setFileStatus
 } from '@/lib/db/files';
-import { getConversationForUser } from '@/lib/db/conversations';
 
-export const runtime = 'nodejs';
+import {
+  getConversationForUser
+} from '@/lib/db/conversations';
 
-const MAX_FILENAME_LENGTH = 255;
+export const runtime =
+  'nodejs';
 
-function jsonError(message: string, status: number) {
+function response(
+  body: unknown,
+  status = 200
+) {
   return NextResponse.json(
-    { error: message },
+    body,
     {
       status,
       headers: {
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
+        'Cache-Control':
+          'no-store',
+        'X-Content-Type-Options':
+          'nosniff'
       }
     }
   );
 }
 
-function sanitizeFileName(name: string) {
-  return name
-    .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/[\\/]/g, '_')
-    .trim()
-    .slice(0, MAX_FILENAME_LENGTH);
+function safeFilename(
+  filename: string
+) {
+  const cleaned =
+    filename
+      .replace(
+        /[^a-zA-Z0-9._ -]/g,
+        '_'
+      )
+      .replace(
+        /\.{2,}/g,
+        '.'
+      )
+      .trim()
+      .slice(0, 180);
+
+  return cleaned || 'upload';
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  req: NextRequest
+) {
   let userId: string;
 
   try {
-    userId = await getCurrentUserId();
-  } catch (err) {
-    return jsonError(
-      'Authentication required.',
-      err instanceof UnauthorizedError ? 401 : 500
+    userId =
+      await getCurrentUserId();
+  } catch (error) {
+    return response(
+      {
+        error:
+          'Authentication required.'
+      },
+      error instanceof UnauthorizedError
+        ? 401
+        : 500
     );
   }
 
-  const formData = await req.formData().catch(() => null);
-
-  if (!formData) {
-    return jsonError(
-      'Expected multipart/form-data with a "file" field.',
-      400
+  const contentLength =
+    Number(
+      req.headers.get(
+        'content-length'
+      ) || 0
     );
-  }
 
-  const file = formData.get('file');
-  const conversationValue = formData.get('conversationId');
-
-  if (!(file instanceof File)) {
-    return jsonError('No file provided.', 400);
-  }
-
-  const conversationId =
-    typeof conversationValue === 'string'
-      ? conversationValue.trim()
-      : '';
-
-  const fileName = sanitizeFileName(file.name);
-
-  if (!fileName) {
-    return jsonError('Invalid file name.', 400);
-  }
-
-  if (file.size <= 0) {
-    return jsonError('The uploaded file is empty.', 400);
-  }
-
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return jsonError(
-      `"${fileName}" exceeds the 20MB file size limit.`,
+  if (
+    contentLength >
+    MAX_FILE_SIZE_BYTES +
+      1024 * 1024
+  ) {
+    return response(
+      {
+        error:
+          'Upload request is too large.'
+      },
       413
     );
   }
 
-  if (!isAllowedFile(file.type, fileName)) {
-    return jsonError(
-      `"${fileName}" has an unsupported file type (${file.type || 'unknown'}).`,
+  const formData =
+    await req
+      .formData()
+      .catch(() => null);
+
+  if (!formData) {
+    return response(
+      {
+        error:
+          'Expected multipart/form-data with a "file" field.'
+      },
+      400
+    );
+  }
+
+  const file =
+    formData.get('file');
+
+  const conversationId =
+    formData.get(
+      'conversationId'
+    );
+
+  if (!(file instanceof File)) {
+    return response(
+      {
+        error:
+          'No file provided.'
+      },
+      400
+    );
+  }
+
+  if (
+    file.size <= 0
+  ) {
+    return response(
+      {
+        error:
+          'The uploaded file is empty.'
+      },
+      400
+    );
+  }
+
+  if (
+    file.size >
+    MAX_FILE_SIZE_BYTES
+  ) {
+    return response(
+      {
+        error:
+          `"${file.name}" exceeds the 20MB limit.`
+      },
+      413
+    );
+  }
+
+  if (
+    !isAllowedFile(
+      file.type,
+      file.name
+    )
+  ) {
+    return response(
+      {
+        error:
+          `"${file.name}" has an unsupported file type.`
+      },
       415
     );
   }
 
-  /*
-   * Conversation authorization:
-   * A user may only attach a file to their own conversation.
-   */
-  if (conversationId) {
-    try {
-      const conversation = await getConversationForUser(
-        conversationId,
+  let safeConversationId:
+    | string
+    | undefined;
+
+  if (
+    typeof conversationId ===
+      'string' &&
+    conversationId.trim()
+  ) {
+    safeConversationId =
+      conversationId.trim();
+
+    const conversation =
+      await getConversationForUser(
+        safeConversationId,
         userId
       );
 
-      if (!conversation) {
-        return jsonError(
-          'Conversation not found.',
-          404
-        );
-      }
-    } catch (err) {
-      console.error(
-        '[files/upload] conversation authorization failed:',
-        err
-      );
-
-      return jsonError(
-        'Failed to verify conversation.',
-        500
+    if (!conversation) {
+      return response(
+        {
+          error:
+            'Conversation not found.'
+        },
+        404
       );
     }
   }
 
-  const buffer = Buffer.from(
-    await file.arrayBuffer()
-  );
+  const filename =
+    safeFilename(file.name);
 
-  const mimeType =
-    file.type || 'application/octet-stream';
-
-  const isImage =
-    mimeType.startsWith('image/');
-
-  let fileRecord;
-
-  try {
-    const storage = getStorageProvider();
-
-    /*
-     * Storage provider is responsible for generating
-     * a safe storage key/path. Never use user input
-     * directly as a filesystem/storage path.
-     */
-    const storagePath = await storage.save(
-      buffer,
-      fileName
+  const buffer =
+    Buffer.from(
+      await file.arrayBuffer()
     );
 
-    fileRecord = await createFileRecord({
-      userId,
-      conversationId: conversationId || undefined,
-      fileName,
-      mimeType,
-      sizeBytes: file.size,
-      storagePath
-    });
+  const mimeType =
+    file.type ||
+    'application/octet-stream';
 
-    if (!fileRecord) {
-      console.error(
-        '[files/upload] file record was not created'
+  const isImage =
+    mimeType.startsWith(
+      'image/'
+    );
+
+  let fileRecord:
+    Awaited<
+      ReturnType<
+        typeof createFileRecord
+      >
+    >;
+
+  try {
+    const storage =
+      getStorageProvider();
+
+    const storagePath =
+      await storage.save(
+        buffer,
+        filename
       );
 
-      return jsonError(
-        'Failed to create file record.',
+    fileRecord =
+      await createFileRecord({
+        userId,
+        conversationId:
+          safeConversationId,
+        fileName: filename,
+        mimeType,
+        sizeBytes:
+          file.size,
+        storagePath
+      });
+
+    if (!fileRecord) {
+      return response(
+        {
+          error:
+            'Failed to create file record.'
+        },
         500
       );
     }
-  } catch (err) {
+  } catch (error) {
     console.error(
-      '[files/upload] storage/database failed:',
-      err
+      '[files/upload] storage failed:',
+      error
     );
 
-    return jsonError(
-      err instanceof Error
-        ? err.message
-        : 'Failed to store file.',
+    return response(
+      {
+        error:
+          'Failed to store file.'
+      },
       500
     );
   }
 
-  /*
-   * Images are passed to the AI as vision input.
-   * They do not need text extraction or embeddings.
-   */
   if (isImage) {
-    try {
-      await setFileStatus(
-        fileRecord.id,
-        'ready'
-      );
+    await setFileStatus(
+      fileRecord.id,
+      'ready'
+    );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'ready'
-          }
-        },
-        {
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
-        }
-      );
-    } catch (err) {
-      console.error(
-        '[files/upload] image status update failed:',
-        err
-      );
-
-      return jsonError(
-        'File was uploaded but could not be finalized.',
-        500
-      );
-    }
+    return response({
+      file: {
+        ...fileRecord,
+        status: 'ready'
+      }
+    });
   }
 
   try {
@@ -233,7 +313,7 @@ export async function POST(req: NextRequest) {
     } = await extractText(
       buffer,
       fileRecord.mimeType,
-      fileName
+      filename
     );
 
     if (!supported) {
@@ -242,160 +322,131 @@ export async function POST(req: NextRequest) {
         'unsupported'
       );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'unsupported'
-          },
-          note:
-            'File stored, but text extraction/RAG is not implemented for this file type yet.'
+      return response({
+        file: {
+          ...fileRecord,
+          status:
+            'unsupported'
         },
-        {
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
-        }
-      );
+        note:
+          'File stored, but text extraction is not available for this type yet.'
+      });
     }
 
-    if (!text || !text.trim()) {
+    if (
+      !text.trim()
+    ) {
       await setFileStatus(
         fileRecord.id,
         'error',
         'No extractable text found in file.'
       );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'error'
-          }
-        },
-        {
-          status: 422,
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
+      return response({
+        file: {
+          ...fileRecord,
+          status: 'error'
         }
-      );
+      });
     }
 
-    const chunks = chunkText(text);
+    const chunks =
+      chunkText(text);
 
-    if (!chunks.length) {
+    if (
+      chunks.length === 0
+    ) {
       await setFileStatus(
         fileRecord.id,
         'error',
-        'No usable text chunks were generated.'
+        'No searchable chunks were created.'
       );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'error'
-          }
-        },
-        {
-          status: 422,
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
+      return response({
+        file: {
+          ...fileRecord,
+          status: 'error'
         }
-      );
+      });
     }
 
-    let embeddings: number[][];
+    let embeddings:
+      number[][];
 
     try {
-      const embeddingsProvider =
+      const provider =
         getEmbeddingsProvider();
 
       embeddings =
-        await embeddingsProvider.embed(
+        await provider.embed(
           chunks
         );
-    } catch (err) {
+    } catch (error) {
       console.error(
         '[files/upload] embeddings failed:',
-        err
+        error
       );
 
       await setFileStatus(
         fileRecord.id,
         'error',
-        err instanceof Error
-          ? err.message.slice(0, 1000)
-          : 'Embedding failed.'
+        'Embedding generation failed.'
       );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'error'
-          },
-          note:
-            'File stored, but embeddings failed.'
+      return response({
+        file: {
+          ...fileRecord,
+          status: 'error'
         },
-        {
-          status: 500,
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
-        }
-      );
+        note:
+          'File stored, but embeddings failed.'
+      });
     }
 
-    const chunkRows = chunks
-      .map((content, index) => ({
-        content,
-        embedding: embeddings[index]
-      }))
-      .filter(
-        (
-          item
-        ): item is {
-          content: string;
-          embedding: number[];
-        } =>
-          Array.isArray(item.embedding) &&
-          item.embedding.length > 0
-      );
+    const records =
+      chunks
+        .map(
+          (
+            content,
+            index
+          ) => ({
+            content,
+            embedding:
+              embeddings[index]
+          })
+        )
+        .filter(
+          (
+            item
+          ): item is {
+            content: string;
+            embedding: number[];
+          } =>
+            Array.isArray(
+              item.embedding
+            )
+        );
 
-    if (!chunkRows.length) {
+    if (
+      records.length === 0
+    ) {
       await setFileStatus(
         fileRecord.id,
         'error',
         'No valid embeddings were generated.'
       );
 
-      return NextResponse.json(
-        {
-          file: {
-            ...fileRecord,
-            status: 'error'
-          }
-        },
-        {
-          status: 500,
-          headers: {
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff'
-          }
+      return response({
+        file: {
+          ...fileRecord,
+          status: 'error'
         }
-      );
+      });
     }
 
     await insertFileChunks(
       fileRecord.id,
-      chunkRows
+      records
     );
 
     await setFileStatus(
@@ -403,46 +454,29 @@ export async function POST(req: NextRequest) {
       'ready'
     );
 
-    return NextResponse.json(
-      {
-        file: {
-          ...fileRecord,
-          status: 'ready'
-        }
-      },
-      {
-        headers: {
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        }
+    return response({
+      file: {
+        ...fileRecord,
+        status: 'ready'
       }
-    );
-  } catch (err) {
+    });
+  } catch (error) {
     console.error(
       '[files/upload] processing failed:',
-      err
+      error
     );
 
-    try {
-      await setFileStatus(
-        fileRecord.id,
-        'error',
-        err instanceof Error
-          ? err.message.slice(0, 1000)
-          : 'File processing failed.'
-      );
-    } catch (statusError) {
-      console.error(
-        '[files/upload] failed to update error status:',
-        statusError
-      );
-    }
-
-    return jsonError(
-      err instanceof Error
-        ? err.message
-        : 'File processing failed.',
-      500
+    await setFileStatus(
+      fileRecord.id,
+      'error',
+      'File processing failed.'
     );
+
+    return response({
+      file: {
+        ...fileRecord,
+        status: 'error'
+      }
+    });
   }
 }
