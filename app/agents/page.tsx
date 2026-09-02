@@ -1,20 +1,29 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import {
+  useEffect,
+  useState,
+  type FormEvent
+} from 'react';
+
 import {
   Bot,
   Edit3,
-  Globe2,
-  Loader2,
-  Lock,
   Plus,
   Trash2,
   X,
+  Globe,
+  Lock,
+  Loader2
 } from 'lucide-react';
 
 import { AppShell } from '@/components/layout/AppShell';
+import { ChatHeader } from '@/components/chat/ChatHeader';
 import { Button } from '@/components/ui/Button';
-import { Input, Textarea } from '@/components/ui/Input';
+import {
+  Input,
+  Textarea
+} from '@/components/ui/Input';
 import { MODELS } from '@/components/chat/ModelSelector';
 
 type Agent = {
@@ -26,10 +35,10 @@ type Agent = {
   model: string;
   avatarUrl: string | null;
   visibility: string;
-  createdAt: string | Date;
+  createdAt: string;
 };
 
-type AgentFormState = {
+type AgentForm = {
   name: string;
   description: string;
   systemInstructions: string;
@@ -38,59 +47,145 @@ type AgentFormState = {
   visibility: 'private' | 'public';
 };
 
-const DEFAULT_MODEL =
-  MODELS[0]?.id || 'meridian-fast';
-
-const EMPTY_FORM: AgentFormState = {
+const EMPTY_FORM: AgentForm = {
   name: '',
   description: '',
   systemInstructions: '',
-  model: DEFAULT_MODEL,
+  model:
+    MODELS[0]?.id ??
+    'meridian-fast',
   avatarUrl: '',
-  visibility: 'private',
+  visibility: 'private'
 };
 
-export default function AgentsPage() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(
-    null
-  );
+function getModelLabel(
+  modelId: string
+): string {
+  const model =
+    MODELS.find(
+      (item) =>
+        item.id === modelId
+    );
 
-  const [showForm, setShowForm] = useState(false);
-  const [editingAgent, setEditingAgent] =
-    useState<Agent | null>(null);
+  return (
+    model?.label ??
+    modelId
+  );
+}
+
+export default function AgentsPage() {
+  const [agents, setAgents] =
+    useState<Agent[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null);
+
+  const [error, setError] =
+    useState('');
+
+  const [modalOpen, setModalOpen] =
+    useState(false);
+
+  const [editingId, setEditingId] =
+    useState<string | null>(null);
 
   const [form, setForm] =
-    useState<AgentFormState>(EMPTY_FORM);
-
-  const [error, setError] = useState('');
+    useState<AgentForm>(
+      EMPTY_FORM
+    );
 
   async function loadAgents() {
+    setLoading(true);
+    setError('');
+
     try {
-      setLoading(true);
-      setError('');
+      const response =
+        await fetch(
+          '/api/agents',
+          {
+            method: 'GET',
+            cache: 'no-store'
+          }
+        );
 
-      const response = await fetch('/api/agents', {
-        method: 'GET',
-        cache: 'no-store',
-      });
-
-      const data = await response.json().catch(() => null);
+      const data: unknown =
+        await response.json();
 
       if (!response.ok) {
+        const message =
+          typeof data ===
+            'object' &&
+          data !== null &&
+          'error' in data &&
+          typeof (
+            data as {
+              error?: unknown;
+            }
+          ).error === 'string'
+            ? (
+                data as {
+                  error: string;
+                }
+              ).error
+            : 'Failed to load agents.';
+
         throw new Error(
-          data?.error || 'Unable to load agents.'
+          message
         );
       }
 
-      setAgents(data?.agents ?? []);
+      const parsed =
+        typeof data ===
+          'object' &&
+        data !== null &&
+        'agents' in data &&
+        Array.isArray(
+          (
+            data as {
+              agents?: unknown;
+            }
+          ).agents
+        )
+          ? (
+              data as {
+                agents: unknown[];
+              }
+            ).agents
+          : [];
+
+      const safeAgents =
+        parsed.filter(
+          (
+            item
+          ): item is Agent =>
+            typeof item ===
+              'object' &&
+            item !== null &&
+            typeof (
+              item as Agent
+            ).id === 'string' &&
+            typeof (
+              item as Agent
+            ).name === 'string' &&
+            typeof (
+              item as Agent
+            ).model === 'string'
+        );
+
+      setAgents(
+        safeAgents
+      );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to load agents.'
+          : 'Failed to load agents.'
       );
     } finally {
       setLoading(false);
@@ -102,616 +197,703 @@ export default function AgentsPage() {
   }, []);
 
   function openCreate() {
-    setEditingAgent(null);
-    setForm(EMPTY_FORM);
+    setEditingId(null);
+    setForm({
+      ...EMPTY_FORM
+    });
     setError('');
-    setShowForm(true);
+    setModalOpen(true);
   }
 
-  function openEdit(agent: Agent) {
-    setEditingAgent(agent);
+  function openEdit(
+    agent: Agent
+  ) {
+    setEditingId(agent.id);
 
     setForm({
-      name: agent.name ?? '',
-      description: agent.description ?? '',
+      name: agent.name,
+      description:
+        agent.description ??
+        '',
       systemInstructions:
-        agent.systemInstructions ?? '',
-      model: agent.model || DEFAULT_MODEL,
-      avatarUrl: agent.avatarUrl ?? '',
+        agent.systemInstructions ??
+        '',
+      model:
+        agent.model,
+      avatarUrl:
+        agent.avatarUrl ??
+        '',
       visibility:
-        agent.visibility === 'public'
+        agent.visibility ===
+        'public'
           ? 'public'
-          : 'private',
+          : 'private'
     });
 
     setError('');
-    setShowForm(true);
+    setModalOpen(true);
   }
 
-  function closeForm() {
+  function closeModal() {
     if (saving) return;
 
-    setShowForm(false);
-    setEditingAgent(null);
-    setForm(EMPTY_FORM);
-    setError('');
+    setModalOpen(false);
+    setEditingId(null);
+    setForm({
+      ...EMPTY_FORM
+    });
   }
 
-  async function handleSubmit(
+  function updateField<
+    K extends keyof AgentForm
+  >(
+    field: K,
+    value: AgentForm[K]
+  ) {
+    setForm(
+      (current) => ({
+        ...current,
+        [field]: value
+      })
+    );
+  }
+
+  async function saveAgent(
     event: FormEvent<HTMLFormElement>
   ) {
     event.preventDefault();
 
-    const name = form.name.trim();
+    const name =
+      form.name.trim();
 
     if (!name) {
-      setError('Agent name is required.');
+      setError(
+        'Agent name is required.'
+      );
       return;
     }
 
-    if (form.avatarUrl.trim()) {
-      try {
-        const url = new URL(form.avatarUrl.trim());
-
-        if (
-          url.protocol !== 'http:' &&
-          url.protocol !== 'https:'
-        ) {
-          throw new Error();
-        }
-      } catch {
-        setError(
-          'Avatar URL must be a valid HTTP or HTTPS URL.'
-        );
-        return;
-      }
-    }
+    setSaving(true);
+    setError('');
 
     try {
-      setSaving(true);
-      setError('');
+      const payload = {
+        name,
+        description:
+          form.description.trim(),
+        systemInstructions:
+          form.systemInstructions.trim(),
+        model:
+          form.model,
+        avatarUrl:
+          form.avatarUrl.trim(),
+        visibility:
+          form.visibility
+      };
 
-      const isEditing = Boolean(editingAgent);
+      const endpoint =
+        editingId
+          ? `/api/agents/${editingId}`
+          : '/api/agents';
 
-      const response = await fetch(
-        isEditing
-          ? `/api/agents/${editingAgent!.id}`
-          : '/api/agents',
-        {
-          method: isEditing ? 'PATCH' : 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name,
-            description:
-              form.description.trim() || null,
-            systemInstructions:
-              form.systemInstructions.trim() || null,
-            model: form.model,
-            avatarUrl:
-              form.avatarUrl.trim() || null,
-            visibility: form.visibility,
-          }),
-        }
-      );
+      const response =
+        await fetch(
+          endpoint,
+          {
+            method: editingId
+              ? 'PATCH'
+              : 'POST',
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
+            body: JSON.stringify(
+              payload
+            )
+          }
+        );
 
-      const data = await response.json().catch(() => null);
+      const data: unknown =
+        await response.json();
 
       if (!response.ok) {
+        const message =
+          typeof data ===
+            'object' &&
+          data !== null &&
+          'error' in data &&
+          typeof (
+            data as {
+              error?: unknown;
+            }
+          ).error === 'string'
+            ? (
+                data as {
+                  error: string;
+                }
+              ).error
+            : 'Failed to save agent.';
+
         throw new Error(
-          data?.error || 'Unable to save agent.'
+          message
         );
       }
 
-      if (isEditing) {
-        setAgents((current) =>
-          current.map((agent) =>
-            agent.id === editingAgent!.id
-              ? data.agent
-              : agent
-          )
-        );
-      } else if (data?.agent) {
-        setAgents((current) => [
-          data.agent,
-          ...current,
-        ]);
-      }
+      setModalOpen(false);
+      setEditingId(null);
+      setForm({
+        ...EMPTY_FORM
+      });
 
-      closeForm();
+      await loadAgents();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to save agent.'
+          : 'Failed to save agent.'
       );
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(agent: Agent) {
-    const confirmed = window.confirm(
-      `Delete "${agent.name}"? This action cannot be undone.`
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setDeletingId(agent.id);
-      setError('');
-
-      const response = await fetch(
-        `/api/agents/${agent.id}`,
-        {
-          method: 'DELETE',
-        }
+  async function deleteAgent(
+    agent: Agent
+  ) {
+    const confirmed =
+      window.confirm(
+        `Delete "${agent.name}" permanently?`
       );
 
-      const data = await response.json().catch(() => null);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(
+      agent.id
+    );
+    setError('');
+
+    try {
+      const response =
+        await fetch(
+          `/api/agents/${agent.id}`,
+          {
+            method: 'DELETE'
+          }
+        );
+
+      const data: unknown =
+        await response.json();
 
       if (!response.ok) {
+        const message =
+          typeof data ===
+            'object' &&
+          data !== null &&
+          'error' in data &&
+          typeof (
+            data as {
+              error?: unknown;
+            }
+          ).error === 'string'
+            ? (
+                data as {
+                  error: string;
+                }
+              ).error
+            : 'Failed to delete agent.';
+
         throw new Error(
-          data?.error || 'Unable to delete agent.'
+          message
         );
       }
 
-      setAgents((current) =>
-        current.filter(
-          (item) => item.id !== agent.id
-        )
+      setAgents(
+        (current) =>
+          current.filter(
+            (item) =>
+              item.id !==
+              agent.id
+          )
       );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to delete agent.'
+          : 'Failed to delete agent.'
       );
     } finally {
       setDeletingId(null);
     }
   }
 
-  function modelLabel(modelId: string) {
-    return (
-      MODELS.find((model) => model.id === modelId)
-        ?.name || modelId
-    );
-  }
-
   return (
     <AppShell>
-      <main className="min-h-screen px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                  <Bot className="h-5 w-5 text-primary" />
-                </div>
+      <ChatHeader title="Agents" />
 
-                <h1 className="text-2xl font-semibold tracking-tight">
-                  Agents
-                </h1>
-              </div>
-
-              <p className="text-sm text-muted-foreground">
-                Create custom AI agents with their own
-                instructions, model, and visibility.
-              </p>
-            </div>
-
-            <Button
-              onClick={openCreate}
-              className="w-full sm:w-auto"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New Agent
-            </Button>
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-border px-4 py-3 dark:border-slate-border-dark md:px-6">
+          <div>
+            <h1 className="text-lg font-semibold text-ink dark:text-paper">
+              Custom Agents
+            </h1>
+            <p className="mt-0.5 text-[13px] text-slate">
+              Create AI agents with custom instructions and models.
+            </p>
           </div>
 
-          {error && !showForm && (
-            <div className="mb-6 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
+          <Button
+            size="sm"
+            onClick={openCreate}
+          >
+            <Plus size={16} />
+            New Agent
+          </Button>
+        </div>
 
+        {error && (
+          <div className="mx-4 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300 md:mx-6">
+            {error}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
           {loading ? (
-            <div className="flex min-h-[300px] items-center justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <div className="flex h-full items-center justify-center">
+              <Loader2
+                size={24}
+                className="animate-spin text-cobalt"
+              />
             </div>
           ) : agents.length === 0 ? (
-            <div className="rounded-2xl border border-border bg-card p-10 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
-                <Bot className="h-7 w-7 text-muted-foreground" />
+            <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-cobalt/10 text-cobalt">
+                <Bot size={28} />
               </div>
 
-              <h2 className="text-lg font-semibold">
+              <h2 className="text-lg font-semibold text-ink dark:text-paper">
                 No agents yet
               </h2>
 
-              <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-                Create a custom AI agent for a specific
-                workflow, role, or task.
+              <p className="mt-1 max-w-md text-sm text-slate">
+                Create your first custom AI agent with its own instructions, model and visibility.
               </p>
 
               <Button
+                className="mt-5"
                 onClick={openCreate}
-                className="mt-6"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus size={16} />
                 Create Agent
               </Button>
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {agents.map((agent) => (
-                <article
-                  key={agent.id}
-                  className="group flex min-h-[250px] flex-col rounded-2xl border border-border bg-card p-5 transition hover:border-primary/30 hover:shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      {agent.avatarUrl ? (
-                        <img
-                          src={agent.avatarUrl}
-                          alt=""
-                          className="h-11 w-11 shrink-0 rounded-xl object-cover"
-                          onError={(event) => {
-                            event.currentTarget.style.display =
-                              'none';
-                          }}
-                        />
-                      ) : (
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-                          <Bot className="h-5 w-5 text-primary" />
-                        </div>
-                      )}
-
-                      <div className="min-w-0">
-                        <h2 className="truncate font-semibold">
-                          {agent.name}
-                        </h2>
-
-                        <p className="truncate text-xs text-muted-foreground">
-                          {modelLabel(agent.model)}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div
-                      className="shrink-0 text-muted-foreground"
-                      title={
-                        agent.visibility === 'public'
-                          ? 'Public'
-                          : 'Private'
-                      }
-                    >
-                      {agent.visibility === 'public' ? (
-                        <Globe2 className="h-4 w-4" />
-                      ) : (
-                        <Lock className="h-4 w-4" />
-                      )}
-                    </div>
-                  </div>
-
-                  <p className="mt-4 line-clamp-3 text-sm text-muted-foreground">
-                    {agent.description ||
-                      'No agent description added yet.'}
-                  </p>
-
-                  {agent.systemInstructions && (
-                    <div className="mt-4 rounded-xl bg-muted/50 p-3">
-                      <p className="mb-1 text-xs font-medium text-foreground">
-                        System instructions
-                      </p>
-
-                      <p className="line-clamp-2 text-xs text-muted-foreground">
-                        {agent.systemInstructions}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="mt-auto flex items-center gap-2 pt-5">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => openEdit(agent)}
-                      className="flex-1"
-                    >
-                      <Edit3 className="mr-2 h-4 w-4" />
-                      Edit
-                    </Button>
-
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      onClick={() =>
-                        void handleDelete(agent)
-                      }
-                      disabled={deletingId === agent.id}
-                    >
-                      {deletingId === agent.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-
-          {showForm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-              <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-background shadow-xl">
-                <div className="sticky top-0 flex items-center justify-between border-b border-border bg-background px-5 py-4">
-                  <div>
-                    <h2 className="font-semibold">
-                      {editingAgent
-                        ? 'Edit Agent'
-                        : 'Create Agent'}
-                    </h2>
-
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Define how your custom AI agent should
-                      behave.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={closeForm}
-                    disabled={saving}
-                    className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
-                    aria-label="Close"
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {agents.map(
+                (agent) => (
+                  <article
+                    key={agent.id}
+                    className="rounded-2xl border border-slate-border bg-white p-4 shadow-sm dark:border-slate-border-dark dark:bg-surface-dark-raised"
                   >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {agent.avatarUrl ? (
+                          <img
+                            src={
+                              agent.avatarUrl
+                            }
+                            alt=""
+                            className="h-11 w-11 shrink-0 rounded-xl object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-cobalt/10 text-cobalt">
+                            <Bot size={21} />
+                          </div>
+                        )}
 
-                <form
-                  onSubmit={handleSubmit}
-                  className="space-y-5 p-5"
-                >
-                  {error && (
-                    <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      {error}
-                    </div>
-                  )}
+                        <div className="min-w-0">
+                          <h2 className="truncate font-semibold text-ink dark:text-paper">
+                            {agent.name}
+                          </h2>
 
-                  <div>
-                    <label
-                      htmlFor="agent-name"
-                      className="mb-2 block text-sm font-medium"
-                    >
-                      Agent name
-                    </label>
-
-                    <Input
-                      id="agent-name"
-                      value={form.name}
-                      maxLength={120}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          name: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. SEO Expert"
-                      disabled={saving}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="agent-description"
-                      className="mb-2 block text-sm font-medium"
-                    >
-                      Description
-                    </label>
-
-                    <Textarea
-                      id="agent-description"
-                      value={form.description}
-                      maxLength={1000}
-                      rows={3}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          description:
-                            event.target.value,
-                        }))
-                      }
-                      placeholder="What is this agent designed to do?"
-                      disabled={saving}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="agent-instructions"
-                      className="mb-2 block text-sm font-medium"
-                    >
-                      System instructions
-                    </label>
-
-                    <Textarea
-                      id="agent-instructions"
-                      value={form.systemInstructions}
-                      maxLength={20000}
-                      rows={8}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          systemInstructions:
-                            event.target.value,
-                        }))
-                      }
-                      placeholder="Define the agent's role, behavior, rules, and response style..."
-                      disabled={saving}
-                    />
-
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {form.systemInstructions.length}/20000
-                    </p>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="agent-model"
-                      className="mb-2 block text-sm font-medium"
-                    >
-                      Model
-                    </label>
-
-                    <select
-                      id="agent-model"
-                      value={form.model}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          model: event.target.value,
-                        }))
-                      }
-                      disabled={saving}
-                      className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-                    >
-                      {MODELS.map((model) => (
-                        <option
-                          key={model.id}
-                          value={model.id}
-                        >
-                          {model.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="agent-avatar"
-                      className="mb-2 block text-sm font-medium"
-                    >
-                      Avatar URL
-                    </label>
-
-                    <Input
-                      id="agent-avatar"
-                      type="url"
-                      value={form.avatarUrl}
-                      maxLength={2000}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          avatarUrl: event.target.value,
-                        }))
-                      }
-                      placeholder="https://example.com/avatar.png"
-                      disabled={saving}
-                    />
-                  </div>
-
-                  <div>
-                    <p className="mb-2 text-sm font-medium">
-                      Visibility
-                    </p>
-
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setForm((current) => ({
-                            ...current,
-                            visibility: 'private',
-                          }))
-                        }
-                        disabled={saving}
-                        className={`rounded-xl border p-4 text-left transition ${
-                          form.visibility === 'private'
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:bg-muted'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Lock className="h-4 w-4" />
-                          <span className="text-sm font-medium">
-                            Private
-                          </span>
+                          <p className="truncate text-xs text-slate">
+                            {getModelLabel(
+                              agent.model
+                            )}
+                          </p>
                         </div>
+                      </div>
 
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Only you can use this agent.
-                        </p>
-                      </button>
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-light px-2 py-1 text-[11px] text-slate dark:bg-surface-dark">
+                        {agent.visibility ===
+                        'public' ? (
+                          <Globe
+                            size={11}
+                          />
+                        ) : (
+                          <Lock
+                            size={11}
+                          />
+                        )}
 
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setForm((current) => ({
-                            ...current,
-                            visibility: 'public',
-                          }))
-                        }
-                        disabled={saving}
-                        className={`rounded-xl border p-4 text-left transition ${
-                          form.visibility === 'public'
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:bg-muted'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Globe2 className="h-4 w-4" />
-                          <span className="text-sm font-medium">
-                            Public
-                          </span>
-                        </div>
-
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Designed to be shareable.
-                        </p>
-                      </button>
+                        {agent.visibility ===
+                        'public'
+                          ? 'Public'
+                          : 'Private'}
+                      </span>
                     </div>
-                  </div>
 
-                  <div className="flex flex-col-reverse gap-2 border-t border-border pt-5 sm:flex-row sm:justify-end">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={closeForm}
-                      disabled={saving}
-                    >
-                      Cancel
-                    </Button>
+                    {agent.description && (
+                      <p className="mt-4 line-clamp-3 text-sm leading-6 text-slate">
+                        {
+                          agent.description
+                        }
+                      </p>
+                    )}
 
-                    <Button
-                      type="submit"
-                      disabled={
-                        saving || !form.name.trim()
-                      }
-                    >
-                      {saving ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          {editingAgent
-                            ? 'Save Changes'
-                            : 'Create Agent'}
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </form>
-              </div>
+                    <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-border pt-3 dark:border-slate-border-dark">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          openEdit(
+                            agent
+                          )
+                        }
+                        disabled={
+                          deletingId ===
+                          agent.id
+                        }
+                      >
+                        <Edit3
+                          size={14}
+                        />
+                        Edit
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() =>
+                          void deleteAgent(
+                            agent
+                          )
+                        }
+                        disabled={
+                          deletingId ===
+                          agent.id
+                        }
+                      >
+                        {deletingId ===
+                        agent.id ? (
+                          <Loader2
+                            size={14}
+                            className="animate-spin"
+                          />
+                        ) : (
+                          <Trash2
+                            size={14}
+                          />
+                        )}
+                        Delete
+                      </Button>
+                    </div>
+                  </article>
+                )
+              )}
             </div>
           )}
         </div>
-      </main>
+      </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-ink">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-border bg-white px-5 py-4 dark:border-slate-border-dark dark:bg-ink">
+              <div>
+                <h2 className="font-semibold text-ink dark:text-paper">
+                  {editingId
+                    ? 'Edit Agent'
+                    : 'Create Agent'}
+                </h2>
+                <p className="mt-0.5 text-xs text-slate">
+                  Configure how your agent behaves.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={
+                  closeModal
+                }
+                disabled={saving}
+                className="rounded-lg p-2 text-slate transition hover:bg-surface-light dark:hover:bg-surface-dark-raised"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={
+                saveAgent
+              }
+              className="space-y-5 p-5"
+            >
+              <div>
+                <label
+                  htmlFor="agent-name"
+                  className="mb-1.5 block text-sm font-medium text-ink dark:text-paper"
+                >
+                  Name
+                </label>
+
+                <Input
+                  id="agent-name"
+                  value={form.name}
+                  onChange={(event) =>
+                    updateField(
+                      'name',
+                      event.target
+                        .value
+                    )
+                  }
+                  maxLength={120}
+                  placeholder="e.g. Marketing Expert"
+                  required
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="agent-description"
+                  className="mb-1.5 block text-sm font-medium text-ink dark:text-paper"
+                >
+                  Description
+                </label>
+
+                <Textarea
+                  id="agent-description"
+                  value={
+                    form.description
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      'description',
+                      event.target
+                        .value
+                    )
+                  }
+                  maxLength={1000}
+                  rows={3}
+                  placeholder="What is this agent designed to do?"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="agent-instructions"
+                  className="mb-1.5 block text-sm font-medium text-ink dark:text-paper"
+                >
+                  System Instructions
+                </label>
+
+                <Textarea
+                  id="agent-instructions"
+                  value={
+                    form.systemInstructions
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      'systemInstructions',
+                      event.target
+                        .value
+                    )
+                  }
+                  maxLength={20000}
+                  rows={8}
+                  placeholder="Define the agent's role, behavior, tone, rules and objectives..."
+                />
+
+                <p className="mt-1 text-right text-[11px] text-slate">
+                  {
+                    form
+                      .systemInstructions
+                      .length
+                  }{' '}
+                  / 20,000
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="agent-model"
+                  className="mb-1.5 block text-sm font-medium text-ink dark:text-paper"
+                >
+                  Model
+                </label>
+
+                <select
+                  id="agent-model"
+                  value={
+                    form.model
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      'model',
+                      event.target
+                        .value
+                    )
+                  }
+                  className="h-10 w-full rounded-xl border border-slate-border bg-white px-3.5 text-sm text-ink outline-none focus:border-cobalt dark:border-slate-border-dark dark:bg-surface-dark-raised dark:text-paper"
+                >
+                  {MODELS.map(
+                    (model) => (
+                      <option
+                        key={
+                          model.id
+                        }
+                        value={
+                          model.id
+                        }
+                      >
+                        {model.label}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="agent-avatar"
+                  className="mb-1.5 block text-sm font-medium text-ink dark:text-paper"
+                >
+                  Avatar URL
+                </label>
+
+                <Input
+                  id="agent-avatar"
+                  type="url"
+                  value={
+                    form.avatarUrl
+                  }
+                  onChange={(event) =>
+                    updateField(
+                      'avatarUrl',
+                      event.target
+                        .value
+                    )
+                  }
+                  placeholder="https://..."
+                />
+              </div>
+
+              <div>
+                <p className="mb-2 text-sm font-medium text-ink dark:text-paper">
+                  Visibility
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateField(
+                        'visibility',
+                        'private'
+                      )
+                    }
+                    className={`rounded-xl border p-3 text-left transition ${
+                      form.visibility ===
+                      'private'
+                        ? 'border-cobalt bg-cobalt/5'
+                        : 'border-slate-border dark:border-slate-border-dark'
+                    }`}
+                  >
+                    <Lock
+                      size={17}
+                      className="mb-2 text-cobalt"
+                    />
+
+                    <div className="text-sm font-medium text-ink dark:text-paper">
+                      Private
+                    </div>
+
+                    <div className="mt-1 text-xs text-slate">
+                      Only you can use this agent.
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateField(
+                        'visibility',
+                        'public'
+                      )
+                    }
+                    className={`rounded-xl border p-3 text-left transition ${
+                      form.visibility ===
+                      'public'
+                        ? 'border-cobalt bg-cobalt/5'
+                        : 'border-slate-border dark:border-slate-border-dark'
+                    }`}
+                  >
+                    <Globe
+                      size={17}
+                      className="mb-2 text-cobalt"
+                    />
+
+                    <div className="text-sm font-medium text-ink dark:text-paper">
+                      Public
+                    </div>
+
+                    <div className="mt-1 text-xs text-slate">
+                      Allow others to discover this agent.
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 border-t border-slate-border pt-4 dark:border-slate-border-dark">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={
+                    closeModal
+                  }
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+
+                <Button
+                  type="submit"
+                  disabled={saving}
+                >
+                  {saving && (
+                    <Loader2
+                      size={15}
+                      className="animate-spin"
+                    />
+                  )}
+
+                  {editingId
+                    ? 'Save Changes'
+                    : 'Create Agent'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }
