@@ -5,7 +5,9 @@ import {
   useState
 } from 'react';
 
-import { useParams } from 'next/navigation';
+import {
+  useParams
+} from 'next/navigation';
 
 import { AppShell } from '@/components/layout/AppShell';
 import { ChatHeader } from '@/components/chat/ChatHeader';
@@ -13,28 +15,54 @@ import { MessageList } from '@/components/chat/MessageList';
 import { ChatComposer } from '@/components/chat/ChatComposer';
 import { useChat } from '@/lib/hooks/useChat';
 
-import type { Attachment } from '@/lib/types/chat';
+import type {
+  Attachment
+} from '@/lib/types/chat';
 
 export default function ConversationPage() {
   const params =
-    useParams<{ id: string }>();
+    useParams<{
+      id: string;
+    }>();
+
+  const conversationId =
+    typeof params?.id ===
+    'string'
+      ? params.id
+      : '';
 
   const [input, setInput] =
     useState('');
 
   const [model, setModel] =
-    useState('meridian-fast');
+    useState(
+      'meridian-fast'
+    );
 
-  const [attachedFiles, setAttachedFiles] =
-    useState<Attachment[]>([]);
+  const [
+    attachedFiles,
+    setAttachedFiles
+  ] =
+    useState<Attachment[]>(
+      []
+    );
 
-  const [webSearchEnabled, setWebSearchEnabled] =
+  const [
+    webSearchEnabled,
+    setWebSearchEnabled
+  ] =
     useState(false);
 
-  const [deepResearchEnabled, setDeepResearchEnabled] =
+  const [
+    deepResearchEnabled,
+    setDeepResearchEnabled
+  ] =
     useState(false);
 
-  const [loaded, setLoaded] =
+  const [
+    loaded,
+    setLoaded
+  ] =
     useState(false);
 
   const {
@@ -44,38 +72,62 @@ export default function ConversationPage() {
     regenerate,
     stop,
     editMessage,
-    loadConversation
-  } = useChat(params.id);
+    loadConversation,
+    conversationTitle
+  } =
+    useChat(
+      conversationId
+    );
 
   useEffect(() => {
-    if (!params.id) return;
+    if (
+      !conversationId
+    ) {
+      return;
+    }
 
-    loadConversation(
-      params.id
+    let cancelled =
+      false;
+
+    setLoaded(false);
+
+    void loadConversation(
+      conversationId
     ).finally(() => {
-      setLoaded(true);
+      if (!cancelled) {
+        setLoaded(true);
+      }
     });
 
-    // loadConversation is intentionally
-    // called when route id changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    conversationId,
+    loadConversation
+  ]);
 
   function handleSend() {
+    const trimmed =
+      input.trim();
+
     if (
-      !input.trim() ||
+      !trimmed ||
       isGenerating
     ) {
       return;
     }
 
     const fileIds =
-      attachedFiles.map(
-        (file) => file.id
-      );
+      attachedFiles
+        .map(
+          (file) =>
+            file.id
+        )
+        .filter(Boolean);
 
     sendMessage(
-      input,
+      trimmed,
       model,
       fileIds,
       webSearchEnabled,
@@ -87,83 +139,99 @@ export default function ConversationPage() {
     setAttachedFiles([]);
   }
 
-  const firstMessage =
-    messages[0];
-
   const title =
-    firstMessage
-      ? firstMessage.content.slice(
-          0,
-          48
-        )
-      : loaded
-        ? 'Conversation'
-        : 'Loading…';
+    conversationTitle &&
+    conversationTitle !==
+      'New chat'
+      ? conversationTitle
+      : messages[0]
+          ?.content
+          ?.slice(0, 48) ||
+        (loaded
+          ? 'Conversation'
+          : 'Loading…');
 
   return (
-    <AppShell>
-      <ChatHeader title={title} />
+    <AppShell
+      activeConversationId={
+        conversationId
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col">
 
-      <MessageList
-        messages={messages}
-        isGenerating={
-          isGenerating
-        }
-        onRegenerate={(id) =>
-          regenerate(
-            id,
-            model,
-            undefined,
-            webSearchEnabled,
-            deepResearchEnabled
-          )
-        }
-        onEdit={(
-          id,
-          content
-        ) =>
-          editMessage(
-            id,
-            content,
-            model,
-            undefined,
-            webSearchEnabled,
-            deepResearchEnabled
-          )
-        }
-      />
+        <ChatHeader
+          title={title}
+        />
 
-      <ChatComposer
-        value={input}
-        onChange={setInput}
-        onSend={handleSend}
-        isGenerating={
-          isGenerating
-        }
-        onStop={stop}
-        model={model}
-        onModelChange={
-          setModel
-        }
-        conversationId={
-          params.id
-        }
-        onAttachedFilesChange={
-          setAttachedFiles
-        }
-        webSearchEnabled={
-          webSearchEnabled
-        }
-        onWebSearchEnabledChange={
-          setWebSearchEnabled
-        }
-        deepResearchEnabled={
-          deepResearchEnabled
-        }
-        onDeepResearchEnabledChange={
-          setDeepResearchEnabled
-        }
-      />
+        <div className="min-h-0 flex-1">
+          <MessageList
+            messages={
+              messages
+            }
+            onRegenerate={(
+              id
+            ) =>
+              regenerate(
+                id,
+                model,
+                undefined,
+                webSearchEnabled,
+                deepResearchEnabled
+              )
+            }
+            onEdit={(
+              id,
+              content
+            ) =>
+              editMessage(
+                id,
+                content,
+                model,
+                undefined,
+                webSearchEnabled,
+                deepResearchEnabled
+              )
+            }
+          />
+        </div>
+
+        <div className="shrink-0">
+          <ChatComposer
+            value={input}
+            onChange={setInput}
+            onSend={
+              handleSend
+            }
+            isGenerating={
+              isGenerating
+            }
+            onStop={stop}
+            model={model}
+            onModelChange={
+              setModel
+            }
+            conversationId={
+              conversationId
+            }
+            onAttachedFilesChange={
+              setAttachedFiles
+            }
+            webSearchEnabled={
+              webSearchEnabled
+            }
+            onWebSearchEnabledChange={
+              setWebSearchEnabled
+            }
+            deepResearchEnabled={
+              deepResearchEnabled
+            }
+            onDeepResearchEnabledChange={
+              setDeepResearchEnabled
+            }
+          />
+        </div>
+
+      </div>
     </AppShell>
   );
 }
