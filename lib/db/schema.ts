@@ -10,14 +10,6 @@ import {
   customType
 } from 'drizzle-orm/pg-core';
 
-/**
- * pgvector column type.
- *
- * Requires:
- * CREATE EXTENSION IF NOT EXISTS vector;
- *
- * Dimension must match the embeddings provider.
- */
 const vector = customType<{
   data: number[];
   driverData: string;
@@ -40,11 +32,7 @@ const vector = customType<{
 
 export const messageRoleEnum = pgEnum(
   'message_role',
-  [
-    'system',
-    'user',
-    'assistant'
-  ]
+  ['system', 'user', 'assistant']
 );
 
 export const users = pgTable('users', {
@@ -60,61 +48,40 @@ export const users = pgTable('users', {
 
   avatarUrl: text('avatar_url'),
 
+  passwordHash: text('password_hash'),
+
   createdAt: timestamp(
     'created_at',
-    {
-      withTimezone: true
-    }
+    { withTimezone: true }
   )
     .defaultNow()
     .notNull()
 });
 
-export const profiles = pgTable(
-  'profiles',
-  {
-    userId: uuid('user_id')
-      .primaryKey()
-      .references(
-        () => users.id,
-        {
-          onDelete: 'cascade'
-        }
-      ),
+export const profiles = pgTable('profiles', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(
+      () => users.id,
+      { onDelete: 'cascade' }
+    ),
 
-    plan: text('plan')
-      .notNull()
-      .default('free'),
+  plan: text('plan')
+    .notNull()
+    .default('free'),
 
-    preferences: jsonb(
-      'preferences'
-    )
-      .notNull()
-      .default({}),
+  preferences: jsonb('preferences')
+    .notNull()
+    .default({}),
 
-    updatedAt: timestamp(
-      'updated_at',
-      {
-        withTimezone: true
-      }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
+  updatedAt: timestamp(
+    'updated_at',
+    { withTimezone: true }
+  )
+    .defaultNow()
+    .notNull()
+});
 
-/**
- * Application authentication sessions.
- *
- * This table is used by:
- * - NextAuth integration
- * - currentUser
- * - requireUser
- * - session manager
- * - logout
- * - session management APIs
- * - account password security
- */
 export const authSessions = pgTable(
   'auth_sessions',
   {
@@ -125,43 +92,61 @@ export const authSessions = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
-    userAgent: text(
-      'user_agent'
-    ),
+    userAgent: text('user_agent'),
 
-    ipAddress: text(
-      'ip_address'
-    ),
+    ipAddress: text('ip_address'),
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull(),
 
     lastSeenAt: timestamp(
       'last_seen_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull(),
 
     expiresAt: timestamp(
       'expires_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
+      .notNull()
+  }
+);
+
+export const projects = pgTable(
+  'projects',
+  {
+    id: uuid('id')
+      .defaultRandom()
+      .primaryKey(),
+
+    userId: uuid('user_id')
+      .notNull()
+      .references(
+        () => users.id,
+        { onDelete: 'cascade' }
+      ),
+
+    name: text('name')
+      .notNull(),
+
+    description: text('description'),
+
+    instructions: text('instructions'),
+
+    createdAt: timestamp(
+      'created_at',
+      { withTimezone: true }
+    )
+      .defaultNow()
       .notNull()
   }
 );
@@ -177,17 +162,13 @@ export const conversations = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     projectId: uuid('project_id')
       .references(
         () => projects.id,
-        {
-          onDelete: 'set null'
-        }
+        { onDelete: 'set null' }
       ),
 
     title: text('title')
@@ -202,20 +183,19 @@ export const conversations = pgTable(
       .notNull()
       .default(false),
 
+    shareToken: text('share_token')
+      .unique(),
+
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull(),
 
     updatedAt: timestamp(
       'updated_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
@@ -235,14 +215,10 @@ export const messages = pgTable(
       .notNull()
       .references(
         () => conversations.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
-    role: messageRoleEnum(
-      'role'
-    )
+    role: messageRoleEnum('role')
       .notNull(),
 
     content: text('content')
@@ -250,53 +226,11 @@ export const messages = pgTable(
 
     model: text('model'),
 
-    toolCalls: jsonb(
-      'tool_calls'
-    ),
+    toolCalls: jsonb('tool_calls'),
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
-    )
-      .defaultNow()
-      .notNull()
-  }
-);
-
-export const projects = pgTable(
-  'projects',
-  {
-    id: uuid('id')
-      .defaultRandom()
-      .primaryKey(),
-
-    userId: uuid('user_id')
-      .notNull()
-      .references(
-        () => users.id,
-        {
-          onDelete: 'cascade'
-        }
-      ),
-
-    name: text('name')
-      .notNull(),
-
-    description: text(
-      'description'
-    ),
-
-    instructions: text(
-      'instructions'
-    ),
-
-    createdAt: timestamp(
-      'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
@@ -314,37 +248,26 @@ export const files = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     conversationId: uuid(
       'conversation_id'
-    )
-      .references(
-        () => conversations.id,
-        {
-          onDelete: 'set null'
-        }
-      ),
+    ).references(
+      () => conversations.id,
+      { onDelete: 'set null' }
+    ),
 
     projectId: uuid('project_id')
       .references(
         () => projects.id,
-        {
-          onDelete: 'set null'
-        }
+        { onDelete: 'set null' }
       ),
 
-    fileName: text(
-      'file_name'
-    )
+    fileName: text('file_name')
       .notNull(),
 
-    mimeType: text(
-      'mime_type'
-    )
+    mimeType: text('mime_type')
       .notNull(),
 
     sizeBytes: integer(
@@ -367,9 +290,7 @@ export const files = pgTable(
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
@@ -387,9 +308,7 @@ export const fileChunks = pgTable(
       .notNull()
       .references(
         () => files.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     chunkIndex: integer(
@@ -400,9 +319,7 @@ export const fileChunks = pgTable(
     content: text('content')
       .notNull(),
 
-    embedding: vector(
-      'embedding'
-    )
+    embedding: vector('embedding')
   }
 );
 
@@ -417,9 +334,7 @@ export const agents = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     name: text('name')
@@ -448,9 +363,7 @@ export const agents = pgTable(
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
@@ -468,9 +381,7 @@ export const memories = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     content: text('content')
@@ -478,9 +389,7 @@ export const memories = pgTable(
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
@@ -498,9 +407,7 @@ export const savedItems = pgTable(
       .notNull()
       .references(
         () => users.id,
-        {
-          onDelete: 'cascade'
-        }
+        { onDelete: 'cascade' }
       ),
 
     kind: text('kind')
@@ -511,9 +418,7 @@ export const savedItems = pgTable(
 
     createdAt: timestamp(
       'created_at',
-      {
-        withTimezone: true
-      }
+      { withTimezone: true }
     )
       .defaultNow()
       .notNull()
