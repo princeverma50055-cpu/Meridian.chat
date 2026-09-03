@@ -10,7 +10,7 @@ class VercelBlobStorageProvider implements StorageProvider {
   async save(buffer: Buffer, fileName: string): Promise<string> {
     const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${sanitize(fileName)}`;
     const blob = await put(key, buffer, {
-      access: 'private',
+      access: 'public',
       addRandomSuffix: false
     });
     return blob.url;
