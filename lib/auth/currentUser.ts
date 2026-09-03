@@ -6,22 +6,20 @@ import { authOptions } from '@/lib/auth/config';
 import { getDb } from '@/lib/db/client';
 import {
   users,
-  authSessions
+  authSessions,
 } from '@/lib/db/schema';
 
 const SESSION_MAX_AGE_SECONDS =
   30 * 24 * 60 * 60;
 
-export class UnauthorizedError
-  extends Error {
+export class UnauthorizedError extends Error {
   public readonly status = 401 as const;
 
   constructor(
     message = 'Authentication required.'
   ) {
     super(message);
-    this.name =
-      'UnauthorizedError';
+    this.name = 'UnauthorizedError';
   }
 }
 
@@ -41,10 +39,12 @@ interface SessionUser {
   image?: string | null;
 }
 
+type ServerSession = Awaited<
+  ReturnType<typeof getServerSession>
+>;
+
 function getSessionUser(
-  session: Awaited<
-    ReturnType<typeof getServerSession>
-  >
+  session: ServerSession
 ): SessionUser | null {
   if (!session?.user) {
     return null;
@@ -65,13 +65,11 @@ async function createDatabaseSession(
       SESSION_MAX_AGE_SECONDS * 1000
   );
 
-  await db
-    .insert(authSessions)
-    .values({
-      id,
-      userId,
-      expiresAt
-    });
+  await db.insert(authSessions).values({
+    id,
+    userId,
+    expiresAt,
+  });
 
   return id;
 }
@@ -82,29 +80,22 @@ async function getActiveSession(
 ) {
   const db = getDb();
 
-  const [session] =
-    await db
-      .select({
-        id: authSessions.id
-      })
-      .from(authSessions)
-      .where(
-        and(
-          eq(
-            authSessions.id,
-            sessionId
-          ),
-          eq(
-            authSessions.userId,
-            userId
-          ),
-          gt(
-            authSessions.expiresAt,
-            new Date()
-          )
+  const [session] = await db
+    .select({
+      id: authSessions.id,
+    })
+    .from(authSessions)
+    .where(
+      and(
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(
+          authSessions.expiresAt,
+          new Date()
         )
       )
-      .limit(1);
+    )
+    .limit(1);
 
   return session ?? null;
 }
@@ -112,24 +103,18 @@ async function getActiveSession(
 async function touchSession(
   userId: string,
   sessionId: string
-) {
+): Promise<void> {
   const db = getDb();
 
   await db
     .update(authSessions)
     .set({
-      lastSeenAt: new Date()
+      lastSeenAt: new Date(),
     })
     .where(
       and(
-        eq(
-          authSessions.id,
-          sessionId
-        ),
-        eq(
-          authSessions.userId,
-          userId
-        ),
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
         gt(
           authSessions.expiresAt,
           new Date()
@@ -139,16 +124,12 @@ async function touchSession(
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
-  let session:
-    Awaited<
-      ReturnType<typeof getServerSession>
-    >;
+  let session: ServerSession;
 
   try {
-    session =
-      await getServerSession(
-        authOptions
-      );
+    session = await getServerSession(
+      authOptions
+    );
   } catch (error) {
     console.error(
       '[auth] Session read failed:',
@@ -163,6 +144,10 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   const sessionUser =
     getSessionUser(session);
 
+  /*
+   * Never access sessionUser.id without
+   * first validating that sessionUser exists.
+   */
   const userId =
     sessionUser?.id?.trim();
 
@@ -175,23 +160,16 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   try {
     const db = getDb();
 
-    const [databaseUser] =
-      await db
-        .select({
-          id: users.id,
-          email: users.email,
-          name: users.name,
-          avatarUrl:
-            users.avatarUrl
-        })
-        .from(users)
-        .where(
-          eq(
-            users.id,
-            userId
-          )
-        )
-        .limit(1);
+    const [databaseUser] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
 
     if (!databaseUser) {
       throw new UnauthorizedError(
@@ -199,18 +177,22 @@ export async function getCurrentUser(): Promise<CurrentUser> {
       );
     }
 
+    /*
+     * The NextAuth JWT contains the DB session ID.
+     * If it is missing or expired, create a fresh
+     * database session instead of immediately failing.
+     */
     let sessionId =
-      sessionUser.sessionId?.trim() ??
-      '';
+      sessionUser.sessionId?.trim() ?? '';
 
     if (sessionId) {
-      const active =
+      const activeSession =
         await getActiveSession(
           userId,
           sessionId
         );
 
-      if (!active) {
+      if (!activeSession) {
         sessionId = '';
       }
     }
@@ -229,17 +211,19 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 
     return {
       id: databaseUser.id,
-      email:
-        databaseUser.email,
+      email: databaseUser.email,
+
       name:
         databaseUser.name ??
         sessionUser.name ??
         null,
+
       image:
         databaseUser.avatarUrl ??
         sessionUser.image ??
         null,
-      sessionId
+
+      sessionId,
     };
   } catch (error) {
     if (
@@ -261,9 +245,9 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 }
 
 export async function getCurrentUserId(): Promise<string> {
-  return (
-    await getCurrentUser()
-  ).id;
+  const user = await getCurrentUser();
+
+  return user.id;
 }
 
 export async function getOptionalCurrentUser(): Promise<CurrentUser | null> {
@@ -312,10 +296,10 @@ export function unauthorizedResponse(
   return Response.json(
     {
       error: 'UNAUTHORIZED',
-      message
+      message,
     },
     {
-      status: 401
+      status: 401,
     }
   );
 }
