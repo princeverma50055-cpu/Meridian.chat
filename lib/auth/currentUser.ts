@@ -1,106 +1,112 @@
-import { getServerSession } from "next-auth";
-import { eq } from "drizzle-orm";
-import { randomUUID } from "crypto";
+import { getServerSession } from 'next-auth';
+import { and, eq, gt } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 
-import { authOptions } from "./auth";
-import { getDb } from "@/lib/db";
-import { authSessions, users } from "@/lib/db/schema";
+import { authOptions } from './config';
+import { getDb } from '../db/client';
+import {
+  users,
+  authSessions,
+} from '../db/schema';
 
-const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS =
+  30 * 24 * 60 * 60;
 
-export interface SessionUser {
+export class UnauthorizedError extends Error {
+  public readonly status = 401 as const;
+
+  constructor(
+    message = 'Authentication required.'
+  ) {
+    super(message);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+export interface CurrentUser {
   id: string;
+  email: string;
+  name: string | null;
+  image: string | null;
+  sessionId: string;
+}
+
+interface SessionUser {
+  id?: string;
   sessionId?: string;
   email?: string | null;
   name?: string | null;
   image?: string | null;
 }
 
-type ServerSession = Awaited<ReturnType<typeof getServerSession>>;
+type ServerSession = Awaited<
+  ReturnType<typeof getServerSession>
+>;
 
-export interface CurrentUser {
-  id: string;
-  email: string | null;
-  name: string | null;
-  image: string | null;
-  sessionId: string;
-}
-
-function getSessionUser(session: ServerSession): SessionUser | null {
-  const user = session?.user as
-    | {
-        id?: string;
-        sessionId?: string;
-        email?: string | null;
-        name?: string | null;
-        image?: string | null;
-      }
-    | undefined;
-
-  if (!user?.id) {
+function getSessionUser(
+  session: ServerSession
+): SessionUser | null {
+  if (!session?.user) {
     return null;
   }
 
-  return {
-    id: user.id,
-    sessionId: user.sessionId,
-    email: user.email ?? null,
-    name: user.name ?? null,
-    image: user.image ?? null,
-  };
+  return session.user as SessionUser;
 }
 
-async function createDatabaseSession(userId: string): Promise<string> {
+async function createDatabaseSession(
+  userId: string
+): Promise<string> {
   const db = getDb();
 
-  const id = randomUUID();
+  const sessionId = randomUUID();
 
   const expiresAt = new Date(
-    Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
+    Date.now() +
+      SESSION_MAX_AGE_SECONDS * 1000
   );
 
-  await db.insert(authSessions).values({
-    id,
-    userId,
-    expiresAt,
-  });
+  await db
+    .insert(authSessions)
+    .values({
+      id: sessionId,
+      userId,
+      expiresAt,
+      lastSeenAt: new Date(),
+    });
 
-  return id;
+  return sessionId;
 }
 
-async function getActiveDatabaseSession(
+async function getActiveSession(
   userId: string,
-  sessionId: string,
-): Promise<string | null> {
+  sessionId: string
+) {
   const db = getDb();
 
-  const rows = await db
+  const [session] = await db
     .select({
       id: authSessions.id,
-      expiresAt: authSessions.expiresAt,
     })
     .from(authSessions)
-    .where(eq(authSessions.id, sessionId))
+    .where(
+      and(
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(
+          authSessions.expiresAt,
+          new Date()
+        )
+      )
+    )
     .limit(1);
 
-  const databaseSession = rows[0];
-
-  if (!databaseSession) {
-    return null;
-  }
-
-  if (databaseSession.expiresAt.getTime() <= Date.now()) {
-    await db
-      .delete(authSessions)
-      .where(eq(authSessions.id, sessionId));
-
-    return null;
-  }
-
-  return databaseSession.id;
+  return session ?? null;
 }
 
-async function touchDatabaseSession(sessionId: string): Promise<void> {
+async function touchSession(
+  userId: string,
+  sessionId: string
+): Promise<void> {
   const db = getDb();
 
   await db
@@ -108,93 +114,184 @@ async function touchDatabaseSession(sessionId: string): Promise<void> {
     .set({
       lastSeenAt: new Date(),
     })
-    .where(eq(authSessions.id, sessionId));
+    .where(
+      and(
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(
+          authSessions.expiresAt,
+          new Date()
+        )
+      )
+    );
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
-  const session = await getServerSession(authOptions);
-  const sessionUser = getSessionUser(session);
+  let session: ServerSession;
 
-  if (!sessionUser?.id) {
-    throw new Error("Unauthorized");
-  }
+  try {
+    session = await getServerSession(
+      authOptions
+    );
+  } catch (error) {
+    console.error(
+      '[auth] Session read failed:',
+      error
+    );
 
-  const db = getDb();
-
-  const rows = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      name: users.name,
-      image: users.image,
-    })
-    .from(users)
-    .where(eq(users.id, sessionUser.id))
-    .limit(1);
-
-  const user = rows[0];
-
-  if (!user) {
-    throw new Error("Unauthorized");
-  }
-
-  let databaseSessionId: string | null = null;
-
-  if (sessionUser.sessionId) {
-    databaseSessionId = await getActiveDatabaseSession(
-      sessionUser.id,
-      sessionUser.sessionId,
+    throw new UnauthorizedError(
+      'Unable to verify your authentication session.'
     );
   }
 
-  if (!databaseSessionId) {
-    databaseSessionId = await createDatabaseSession(sessionUser.id);
-  } else {
-    await touchDatabaseSession(databaseSessionId);
+  const sessionUser =
+    getSessionUser(session);
+
+  const userId =
+    sessionUser?.id?.trim();
+
+  if (!userId) {
+    throw new UnauthorizedError(
+      'You must be signed in to continue.'
+    );
   }
 
-  return {
-    id: user.id,
-    email: user.email ?? null,
-    name: user.name ?? null,
-    image: user.image ?? null,
-    sessionId: databaseSessionId,
-  };
+  try {
+    const db = getDb();
+
+    const [databaseUser] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(users)
+      .where(
+        eq(users.id, userId)
+      )
+      .limit(1);
+
+    if (!databaseUser) {
+      throw new UnauthorizedError(
+        'Your account could not be found. Please sign in again.'
+      );
+    }
+
+    let sessionId =
+      sessionUser.sessionId?.trim() ?? '';
+
+    if (sessionId) {
+      const active =
+        await getActiveSession(
+          userId,
+          sessionId
+        );
+
+      if (!active) {
+        sessionId = '';
+      }
+    }
+
+    if (!sessionId) {
+      sessionId =
+        await createDatabaseSession(
+          userId
+        );
+    }
+
+    await touchSession(
+      userId,
+      sessionId
+    );
+
+    return {
+      id: databaseUser.id,
+      email: databaseUser.email,
+      name:
+        databaseUser.name ??
+        sessionUser.name ??
+        null,
+      image:
+        databaseUser.avatarUrl ??
+        sessionUser.image ??
+        null,
+      sessionId,
+    };
+  } catch (error) {
+    if (
+      error instanceof UnauthorizedError
+    ) {
+      throw error;
+    }
+
+    console.error(
+      '[auth] User lookup failed:',
+      error
+    );
+
+    throw new UnauthorizedError(
+      'Unable to verify your authentication session.'
+    );
+  }
 }
 
 export async function getCurrentUserId(): Promise<string> {
   const user = await getCurrentUser();
+
   return user.id;
 }
 
-export async function getOptionalCurrentUser(): Promise<CurrentUser | null> {
+export async function getOptionalCurrentUser(): Promise<
+  CurrentUser | null
+> {
   try {
     return await getCurrentUser();
-  } catch {
-    return null;
+  } catch (error) {
+    if (
+      error instanceof UnauthorizedError
+    ) {
+      return null;
+    }
+
+    throw error;
   }
 }
 
 export async function isAuthenticated(): Promise<boolean> {
-  const user = await getOptionalCurrentUser();
-  return user !== null;
+  try {
+    await getCurrentUser();
+
+    return true;
+  } catch (error) {
+    if (
+      error instanceof UnauthorizedError
+    ) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
-export function isUnauthorizedError(error: unknown): boolean {
+export function isUnauthorizedError(
+  error: unknown
+): error is UnauthorizedError {
   return (
-    error instanceof Error &&
-    error.message.toLowerCase() === "unauthorized"
+    error instanceof UnauthorizedError
   );
 }
 
-export function unauthorizedResponse() {
+export function unauthorizedResponse(
+  message = 'Authentication required.'
+): Response {
   return Response.json(
     {
-      error: "Unauthorized",
-      message: "Please sign in to continue.",
+      error: 'UNAUTHORIZED',
+      message,
     },
     {
       status: 401,
-    },
+    }
   );
 }
