@@ -17,8 +17,7 @@ import {
 } from '@/lib/db/schema';
 import { verifyPassword } from '@/lib/auth/password';
 
-const SESSION_MAX_AGE_SECONDS =
-  30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 interface AppToken extends JWT {
   userId?: string;
@@ -30,6 +29,30 @@ interface AppUser extends NextAuthUser {
   sessionId?: string;
 }
 
+declare module 'next-auth' {
+  interface Session {
+    user: {
+      id: string;
+      sessionId?: string;
+      name?: string | null;
+      email?: string | null;
+      image?: string | null;
+    };
+  }
+
+  interface User {
+    id: string;
+    sessionId?: string;
+  }
+}
+
+declare module 'next-auth/jwt' {
+  interface JWT {
+    userId?: string;
+    sessionId?: string;
+  }
+}
+
 function normalizeEmail(
   email: string | null | undefined
 ): string | null {
@@ -38,9 +61,7 @@ function normalizeEmail(
   return value || null;
 }
 
-async function findUserByEmail(
-  email: string
-) {
+async function findUserByEmail(email: string) {
   const db = getDb();
 
   const [user] = await db
@@ -58,9 +79,7 @@ async function findUserByEmail(
   return user ?? null;
 }
 
-async function findUserById(
-  userId: string
-) {
+async function findUserById(userId: string) {
   const db = getDb();
 
   const [user] = await db
@@ -135,25 +154,20 @@ async function touchAuthSession(
   }
 }
 
-async function provisionUser(
-  user: {
-    id?: string;
-    email?: string | null;
-    name?: string | null;
-    image?: string | null;
-  }
-): Promise<string | null> {
-  const email = normalizeEmail(
-    user.email
-  );
+async function provisionUser(user: {
+  id?: string;
+  email?: string | null;
+  name?: string | null;
+  image?: string | null;
+}): Promise<string | null> {
+  const email = normalizeEmail(user.email);
 
   if (!email) {
     return null;
   }
 
   try {
-    const existing =
-      await findUserByEmail(email);
+    const existing = await findUserByEmail(email);
 
     if (existing) {
       return existing.id;
@@ -169,17 +183,14 @@ async function provisionUser(
       .values({
         id: userId,
         email,
-        name:
-          user.name?.trim() || null,
-        avatarUrl:
-          user.image || null,
+        name: user.name?.trim() || null,
+        avatarUrl: user.image || null,
       });
 
     return userId;
   } catch (error) {
     try {
-      const existing =
-        await findUserByEmail(email);
+      const existing = await findUserByEmail(email);
 
       if (existing) {
         return existing.id;
@@ -198,9 +209,6 @@ async function provisionUser(
 }
 
 export const authOptions: NextAuthOptions = {
-  /*
-   * Support both common secret names.
-   */
   secret:
     process.env.AUTH_SECRET ??
     process.env.NEXTAUTH_SECRET,
@@ -228,10 +236,9 @@ export const authOptions: NextAuthOptions = {
       },
 
       async authorize(credentials) {
-        const email =
-          normalizeEmail(
-            credentials?.email
-          );
+        const email = normalizeEmail(
+          credentials?.email
+        );
 
         const password =
           credentials?.password;
@@ -281,10 +288,8 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    maxAge:
-      SESSION_MAX_AGE_SECONDS,
-    updateAge:
-      24 * 60 * 60,
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    updateAge: 24 * 60 * 60,
   },
 
   pages: {
@@ -304,7 +309,8 @@ export const authOptions: NextAuthOptions = {
       }
 
       if (
-        account?.provider === 'google'
+        account?.provider ===
+        'google'
       ) {
         const userId =
           await provisionUser(user);
@@ -336,7 +342,9 @@ export const authOptions: NextAuthOptions = {
         const appUser =
           user as AppUser;
 
-        let userId =
+        let userId:
+          | string
+          | undefined =
           appUser.id?.trim();
 
         if (!userId) {
@@ -356,9 +364,16 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
-        if (userId) {
-          appToken.userId =
-            userId;
+        /*
+         * Explicit type narrowing.
+         * createAuthSession() receives
+         * a guaranteed string.
+         */
+        if (
+          typeof userId === 'string' &&
+          userId.length > 0
+        ) {
+          appToken.userId = userId;
 
           const sessionId =
             await createAuthSession(
@@ -389,7 +404,8 @@ export const authOptions: NextAuthOptions = {
 
       /*
        * Database session is supplementary.
-       * JWT remains the source of truth.
+       * JWT remains the authentication source
+       * of truth.
        */
       if (appToken.sessionId) {
         await touchAuthSession(
@@ -424,7 +440,9 @@ export const authOptions: NextAuthOptions = {
 
       try {
         databaseUser =
-          await findUserById(userId);
+          await findUserById(
+            userId
+          );
       } catch (error) {
         console.error(
           '[auth] User lookup during session failed:',
@@ -432,10 +450,6 @@ export const authOptions: NextAuthOptions = {
         );
       }
 
-      /*
-       * Explicitly normalize optional
-       * values to string | null.
-       */
       const email =
         databaseUser?.email ??
         session.user?.email ??
@@ -451,13 +465,17 @@ export const authOptions: NextAuthOptions = {
         session.user?.image ??
         null;
 
+      /*
+       * Session type is extended above,
+       * so id/sessionId are valid here.
+       */
       session.user = {
-        name,
-        email,
-        image,
         id: userId,
         sessionId:
           appToken.sessionId,
+        name,
+        email,
+        image,
       };
 
       return session;
