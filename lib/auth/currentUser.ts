@@ -4,27 +4,16 @@ import { randomUUID } from 'node:crypto';
 
 import { authOptions } from '@/lib/auth/config';
 import { getDb } from '@/lib/db/client';
-import {
-  users,
-  authSessions,
-} from '@/lib/db/schema';
+import { users, authSessions } from '@/lib/db/schema';
 
-const SESSION_MAX_AGE_SECONDS =
-  30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 export class UnauthorizedError extends Error {
   public readonly status = 401 as const;
 
-  constructor(
-    message = 'Authentication required.'
-  ) {
+  constructor(message = 'Authentication required.') {
     super(message);
     this.name = 'UnauthorizedError';
-
-    Object.setPrototypeOf(
-      this,
-      UnauthorizedError.prototype
-    );
   }
 }
 
@@ -36,26 +25,35 @@ export interface CurrentUser {
   sessionId: string;
 }
 
-interface SessionUser {
+type ServerSession = Awaited<
+  ReturnType<typeof getServerSession>
+>;
+
+type SessionUser = {
   id?: string;
   sessionId?: string;
   email?: string | null;
   name?: string | null;
   image?: string | null;
-}
+};
 
-type ServerSession = Awaited<
-  ReturnType<typeof getServerSession>
->;
-
+/**
+ * Safely extracts the user object from the NextAuth session.
+ *
+ * We intentionally use a local type assertion here because different
+ * NextAuth/AuthOptions type configurations can expose the session
+ * user fields differently to TypeScript.
+ */
 function getSessionUser(
   session: ServerSession
 ): SessionUser | null {
-  if (!session?.user) {
-    return null;
-  }
+  const sessionWithUser = session as
+    | (ServerSession & {
+        user?: SessionUser | null;
+      })
+    | null;
 
-  return session.user as SessionUser;
+  return sessionWithUser?.user ?? null;
 }
 
 async function createDatabaseSession(
@@ -66,17 +64,14 @@ async function createDatabaseSession(
   const id = randomUUID();
 
   const expiresAt = new Date(
-    Date.now() +
-      SESSION_MAX_AGE_SECONDS * 1000
+    Date.now() + SESSION_MAX_AGE_SECONDS * 1000
   );
 
-  await db
-    .insert(authSessions)
-    .values({
-      id,
-      userId,
-      expiresAt,
-    });
+  await db.insert(authSessions).values({
+    id,
+    userId,
+    expiresAt,
+  });
 
   return id;
 }
@@ -94,18 +89,9 @@ async function getActiveSession(
     .from(authSessions)
     .where(
       and(
-        eq(
-          authSessions.id,
-          sessionId
-        ),
-        eq(
-          authSessions.userId,
-          userId
-        ),
-        gt(
-          authSessions.expiresAt,
-          new Date()
-        )
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(authSessions.expiresAt, new Date())
       )
     )
     .limit(1);
@@ -126,18 +112,9 @@ async function touchSession(
     })
     .where(
       and(
-        eq(
-          authSessions.id,
-          sessionId
-        ),
-        eq(
-          authSessions.userId,
-          userId
-        ),
-        gt(
-          authSessions.expiresAt,
-          new Date()
-        )
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(authSessions.expiresAt, new Date())
       )
     );
 }
@@ -146,10 +123,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   let session: ServerSession;
 
   try {
-    session =
-      await getServerSession(
-        authOptions
-      );
+    session = await getServerSession(authOptions);
   } catch (error) {
     console.error(
       '[auth] Session read failed:',
@@ -161,11 +135,20 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   }
 
-  const sessionUser =
-    getSessionUser(session);
+  const sessionUser = getSessionUser(session);
 
-  const userId =
-    sessionUser?.id?.trim();
+  /*
+   * Explicitly guard against a missing session user.
+   * This also makes sessionUser non-null for all code below,
+   * avoiding TS18047 errors.
+   */
+  if (!sessionUser) {
+    throw new UnauthorizedError(
+      'You must be signed in to continue.'
+    );
+  }
+
+  const userId = sessionUser.id?.trim();
 
   if (!userId) {
     throw new UnauthorizedError(
@@ -176,22 +159,16 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   try {
     const db = getDb();
 
-    const [databaseUser] =
-      await db
-        .select({
-          id: users.id,
-          email: users.email,
-          name: users.name,
-          avatarUrl: users.avatarUrl,
-        })
-        .from(users)
-        .where(
-          eq(
-            users.id,
-            userId
-          )
-        )
-        .limit(1);
+    const [databaseUser] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
 
     if (!databaseUser) {
       throw new UnauthorizedError(
@@ -200,9 +177,12 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     }
 
     let sessionId =
-      sessionUser.sessionId?.trim() ??
-      '';
+      sessionUser.sessionId?.trim() ?? '';
 
+    /*
+     * If the JWT contains a database session ID,
+     * verify that the database session is still active.
+     */
     if (sessionId) {
       const activeSession =
         await getActiveSession(
@@ -215,11 +195,13 @@ export async function getCurrentUser(): Promise<CurrentUser> {
       }
     }
 
+    /*
+     * Self-heal the authentication state if the
+     * database session does not exist anymore.
+     */
     if (!sessionId) {
       sessionId =
-        await createDatabaseSession(
-          userId
-        );
+        await createDatabaseSession(userId);
     }
 
     await touchSession(
@@ -241,10 +223,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
       sessionId,
     };
   } catch (error) {
-    if (
-      error instanceof
-      UnauthorizedError
-    ) {
+    if (error instanceof UnauthorizedError) {
       throw error;
     }
 
@@ -271,10 +250,7 @@ export async function getOptionalCurrentUser(): Promise<
   try {
     return await getCurrentUser();
   } catch (error) {
-    if (
-      error instanceof
-      UnauthorizedError
-    ) {
+    if (error instanceof UnauthorizedError) {
       return null;
     }
 
@@ -288,10 +264,7 @@ export async function isAuthenticated(): Promise<boolean> {
 
     return true;
   } catch (error) {
-    if (
-      error instanceof
-      UnauthorizedError
-    ) {
+    if (error instanceof UnauthorizedError) {
       return false;
     }
 
@@ -302,10 +275,7 @@ export async function isAuthenticated(): Promise<boolean> {
 export function isUnauthorizedError(
   error: unknown
 ): error is UnauthorizedError {
-  return (
-    error instanceof
-    UnauthorizedError
-  );
+  return error instanceof UnauthorizedError;
 }
 
 export function unauthorizedResponse(
