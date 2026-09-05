@@ -122,13 +122,12 @@ async function touchAuthSession(
         lastSeenAt: new Date(),
       })
       .where(
-        eq(authSessions.id, sessionId)
+        eq(
+          authSessions.id,
+          sessionId
+        )
       );
   } catch (error) {
-    /*
-     * authSessions is supplementary.
-     * Never invalidate the JWT because this fails.
-     */
     console.error(
       '[auth] Database session update failed:',
       error
@@ -144,7 +143,9 @@ async function provisionUser(
     image?: string | null;
   }
 ): Promise<string | null> {
-  const email = normalizeEmail(user.email);
+  const email = normalizeEmail(
+    user.email
+  );
 
   if (!email) {
     return null;
@@ -176,9 +177,6 @@ async function provisionUser(
 
     return userId;
   } catch (error) {
-    /*
-     * Handle concurrent account creation.
-     */
     try {
       const existing =
         await findUserByEmail(email);
@@ -201,8 +199,7 @@ async function provisionUser(
 
 export const authOptions: NextAuthOptions = {
   /*
-   * Support the existing AUTH_SECRET setup as well
-   * as the standard NEXTAUTH_SECRET name.
+   * Support both common secret names.
    */
   secret:
     process.env.AUTH_SECRET ??
@@ -299,10 +296,6 @@ export const authOptions: NextAuthOptions = {
       user,
       account,
     }) {
-      /*
-       * Credentials users have already been
-       * validated by authorize().
-       */
       if (
         account?.provider ===
         'credentials'
@@ -310,10 +303,6 @@ export const authOptions: NextAuthOptions = {
         return true;
       }
 
-      /*
-       * Google users are provisioned into
-       * our application users table.
-       */
       if (
         account?.provider === 'google'
       ) {
@@ -343,9 +332,6 @@ export const authOptions: NextAuthOptions = {
       const appToken =
         token as AppToken;
 
-      /*
-       * Runs when the user initially signs in.
-       */
       if (user) {
         const appUser =
           user as AppUser;
@@ -353,9 +339,6 @@ export const authOptions: NextAuthOptions = {
         let userId =
           appUser.id?.trim();
 
-        /*
-         * Fallback lookup by email.
-         */
         if (!userId) {
           const email =
             normalizeEmail(
@@ -373,18 +356,10 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
-        /*
-         * Store our application user ID
-         * inside the JWT.
-         */
         if (userId) {
           appToken.userId =
             userId;
 
-          /*
-           * Database session is optional.
-           * JWT remains the primary session.
-           */
           const sessionId =
             await createAuthSession(
               userId
@@ -396,9 +371,6 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
-        /*
-         * Preserve standard NextAuth JWT data.
-         */
         if (appUser.email) {
           appToken.email =
             appUser.email;
@@ -416,10 +388,8 @@ export const authOptions: NextAuthOptions = {
       }
 
       /*
-       * Touch the optional DB session.
-       *
-       * Failure here MUST NOT invalidate
-       * the JWT.
+       * Database session is supplementary.
+       * JWT remains the source of truth.
        */
       if (appToken.sessionId) {
         await touchAuthSession(
@@ -440,30 +410,22 @@ export const authOptions: NextAuthOptions = {
       const userId =
         appToken.userId;
 
-      /*
-       * No application user ID in JWT.
-       * Return the normal NextAuth session.
-       */
       if (!userId) {
         return session;
       }
 
-      /*
-       * Try to load the latest application
-       * user information.
-       */
-      let databaseUser: Awaited<
-        ReturnType<typeof findUserById>
-      > = null;
+      let databaseUser:
+        | Awaited<
+            ReturnType<
+              typeof findUserById
+            >
+          >
+        | null = null;
 
       try {
         databaseUser =
           await findUserById(userId);
       } catch (error) {
-        /*
-         * Temporary DB failure must NOT
-         * log the user out.
-         */
         console.error(
           '[auth] User lookup during session failed:',
           error
@@ -471,13 +433,8 @@ export const authOptions: NextAuthOptions = {
       }
 
       /*
-       * IMPORTANT:
-       *
-       * NextAuth's default session.user
-       * requires email to be string | null.
-       *
-       * Therefore we normalize every optional
-       * value before assigning it.
+       * Explicitly normalize optional
+       * values to string | null.
        */
       const email =
         databaseUser?.email ??
@@ -494,14 +451,6 @@ export const authOptions: NextAuthOptions = {
         session.user?.image ??
         null;
 
-      /*
-       * Build a fully type-safe user object.
-       *
-       * email is explicitly string | null,
-       * so TypeScript cannot produce:
-       *
-       * string | undefined -> string
-       */
       session.user = {
         name,
         email,
@@ -538,14 +487,15 @@ export const authOptions: NextAuthOptions = {
             )
           );
       } catch (error) {
-        /*
-         * Database cleanup is best-effort.
-         * Sign-out itself must still succeed.
-         */
         console.error(
           '[auth] Database session cleanup failed:',
           error
         );
       }
     },
- 
+  },
+
+  debug:
+    process.env.NODE_ENV ===
+    'development',
+};
