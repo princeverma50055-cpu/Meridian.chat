@@ -1,258 +1,111 @@
-import type { NextAuthOptions, User } from 'next-auth';
+import type { NextAuthOptions, User as NextAuthUser } from 'next-auth';
+import type { JWT } from 'next-auth/jwt';
+
 import GoogleProvider from 'next-auth/providers/google';
 import CredentialsProvider from 'next-auth/providers/credentials';
-import { and, eq, gt } from 'drizzle-orm';
+
+import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { getDb } from '@/lib/db/client';
 import {
   users,
-  profiles,
-  authSessions
+  authSessions,
 } from '@/lib/db/schema';
 import { verifyPassword } from '@/lib/auth/password';
 
 const SESSION_MAX_AGE_SECONDS =
   30 * 24 * 60 * 60;
 
-type MeridianToken = {
-  sub?: string;
+interface AppToken extends JWT {
+  userId?: string;
   sessionId?: string;
-  email?: string;
-  name?: string;
-  picture?: string;
-};
+}
 
-type MeridianSessionUser = {
-  id?: string;
+interface AppUser extends NextAuthUser {
+  id: string;
   sessionId?: string;
-  email?: string | null;
-  name?: string | null;
-  image?: string | null;
-};
-
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
-function getConfiguredGoogleProvider() {
-  const clientId =
-    process.env.GOOGLE_CLIENT_ID?.trim();
+function normalizeEmail(
+  email: string | null | undefined
+): string | null {
+  const value = email?.trim().toLowerCase();
 
-  const clientSecret =
-    process.env.GOOGLE_CLIENT_SECRET?.trim();
-
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-
-  return GoogleProvider({
-    clientId,
-    clientSecret
-  });
+  return value || null;
 }
 
-async function provisionUser(
-  email: string,
-  name?: string | null,
-  image?: string | null
-): Promise<string | null> {
-  const normalizedEmail =
-    normalizeEmail(email);
-
-  if (!normalizedEmail) {
-    return null;
-  }
-
+async function findUserByEmail(
+  email: string
+) {
   const db = getDb();
 
-  const [existingUser] =
-    await db
-      .select({
-        id: users.id
-      })
-      .from(users)
-      .where(
-        eq(
-          users.email,
-          normalizedEmail
-        )
-      )
-      .limit(1);
+  const [user] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      avatarUrl: users.avatarUrl,
+      passwordHash: users.passwordHash,
+    })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
 
-  let userId =
-    existingUser?.id;
-
-  if (!userId) {
-    const [created] =
-      await db
-        .insert(users)
-        .values({
-          email: normalizedEmail,
-          name:
-            name?.trim() ||
-            undefined,
-          avatarUrl:
-            image?.trim() ||
-            undefined
-        })
-        .returning({
-          id: users.id
-        });
-
-    userId = created?.id;
-  } else if (name || image) {
-    await db
-      .update(users)
-      .set({
-        ...(name?.trim()
-          ? {
-              name: name.trim()
-            }
-          : {}),
-        ...(image?.trim()
-          ? {
-              avatarUrl:
-                image.trim()
-            }
-          : {})
-      })
-      .where(
-        eq(
-          users.id,
-          userId
-        )
-      );
-  }
-
-  if (!userId) {
-    return null;
-  }
-
-  const [profile] =
-    await db
-      .select({
-        userId:
-          profiles.userId
-      })
-      .from(profiles)
-      .where(
-        eq(
-          profiles.userId,
-          userId
-        )
-      )
-      .limit(1);
-
-  if (!profile) {
-    await db
-      .insert(profiles)
-      .values({
-        userId
-      })
-      .onConflictDoNothing();
-  }
-
-  return userId;
+  return user ?? null;
 }
 
-async function createDatabaseSession(
+async function findUserById(
   userId: string
-): Promise<string> {
+) {
   const db = getDb();
 
-  const sessionId =
-    randomUUID();
+  const [user] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      avatarUrl: users.avatarUrl,
+      passwordHash: users.passwordHash,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
 
-  const expiresAt =
-    new Date(
-      Date.now() +
-        SESSION_MAX_AGE_SECONDS *
-          1000
-    );
-
-  await db
-    .insert(authSessions)
-    .values({
-      id: sessionId,
-      userId,
-      expiresAt,
-      lastSeenAt: new Date()
-    });
-
-  return sessionId;
+  return user ?? null;
 }
 
-async function isDatabaseSessionActive(
-  sessionId: string,
+async function createAuthSession(
   userId: string
-): Promise<boolean> {
-  if (!sessionId || !userId) {
-    return false;
-  }
-
-  const db = getDb();
-
-  const [row] =
-    await db
-      .select({
-        id: authSessions.id
-      })
-      .from(authSessions)
-      .where(
-        and(
-          eq(
-            authSessions.id,
-            sessionId
-          ),
-          eq(
-            authSessions.userId,
-            userId
-          ),
-          gt(
-            authSessions.expiresAt,
-            new Date()
-          )
-        )
-      )
-      .limit(1);
-
-  return Boolean(row);
-}
-
-async function ensureDatabaseSession(
-  token: MeridianToken
 ): Promise<string | undefined> {
-  if (!token.sub) {
-    return undefined;
-  }
-
-  if (token.sessionId) {
-    try {
-      const active =
-        await isDatabaseSessionActive(
-          token.sessionId,
-          token.sub
-        );
-
-      if (active) {
-        return token.sessionId;
-      }
-    } catch (error) {
-      console.error(
-        '[auth] Existing session check failed:',
-        error
-      );
-    }
-  }
-
   try {
-    return await createDatabaseSession(
-      token.sub
+    const db = getDb();
+
+    const sessionId = randomUUID();
+
+    const expiresAt = new Date(
+      Date.now() +
+        SESSION_MAX_AGE_SECONDS * 1000
     );
+
+    await db
+      .insert(authSessions)
+      .values({
+        id: sessionId,
+        userId,
+        expiresAt,
+      });
+
+    return sessionId;
   } catch (error) {
+    /*
+     * Database sessions are supplementary.
+     *
+     * If authSessions is unavailable, do NOT destroy
+     * the valid NextAuth JWT session.
+     */
     console.error(
-      '[auth] Session creation failed:',
+      '[auth] Database session creation failed:',
       error
     );
 
@@ -260,312 +113,407 @@ async function ensureDatabaseSession(
   }
 }
 
-const credentialsProvider =
-  CredentialsProvider({
-    id: 'credentials',
+async function touchAuthSession(
+  userId: string,
+  sessionId: string
+): Promise<void> {
+  try {
+    const db = getDb();
 
-    name: 'Email and password',
+    await db
+      .update(authSessions)
+      .set({
+        lastSeenAt: new Date(),
+      })
+      .where(
+        eq(authSessions.id, sessionId)
+      );
+  } catch (error) {
+    /*
+     * Never invalidate the JWT because the optional
+     * database session could not be updated.
+     */
+    console.error(
+      '[auth] Database session update failed:',
+      error
+    );
+  }
+}
 
-    credentials: {
-      email: {
-        label: 'Email',
-        type: 'email',
-        placeholder:
-          'you@example.com'
-      },
-      password: {
-        label: 'Password',
-        type: 'password'
-      }
-    },
+async function provisionUser(
+  user: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+    image?: string | null;
+  }
+): Promise<string | null> {
+  const email = normalizeEmail(user.email);
 
-    async authorize(
-      credentials
-    ) {
-      if (
-        !credentials?.email ||
-        !credentials.password
-      ) {
-        return null;
-      }
+  if (!email) {
+    return null;
+  }
 
-      const email =
-        normalizeEmail(
-          credentials.email
-        );
+  try {
+    const db = getDb();
 
-      if (!email) {
-        return null;
-      }
+    const existing =
+      await findUserByEmail(email);
 
-      const db = getDb();
-
-      const [user] =
-        await db
-          .select()
-          .from(users)
-          .where(
-            eq(
-              users.email,
-              email
-            )
-          )
-          .limit(1);
-
-      if (
-        !user?.passwordHash
-      ) {
-        return null;
-      }
-
-      const valid =
-        verifyPassword(
-          credentials.password,
-          user.passwordHash
-        );
-
-      if (!valid) {
-        return null;
-      }
-
-      return {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        image: user.avatarUrl
-      } satisfies User;
+    if (existing) {
+      return existing.id;
     }
-  });
 
-const googleProvider =
-  getConfiguredGoogleProvider();
+    const userId =
+      user.id?.trim() || randomUUID();
 
-export const authOptions: NextAuthOptions =
-  {
-    secret:
-      process.env.AUTH_SECRET,
+    await db
+      .insert(users)
+      .values({
+        id: userId,
+        email,
+        name: user.name?.trim() || null,
+        avatarUrl: user.image || null,
+      });
 
-    session: {
-      strategy: 'jwt',
-      maxAge:
-        SESSION_MAX_AGE_SECONDS,
-      updateAge:
-        24 * 60 * 60
-    },
+    return userId;
+  } catch (error) {
+    /*
+     * Another request may have created the same
+     * user concurrently. Re-check before failing.
+     */
+    try {
+      const existing =
+        await findUserByEmail(email);
 
-    pages: {
-      signIn: '/login'
-    },
+      if (existing) {
+        return existing.id;
+      }
+    } catch {
+      // Ignore secondary lookup failure.
+    }
 
-    providers:
-      googleProvider
-        ? [
-            googleProvider,
-            credentialsProvider
-          ]
-        : [
-            credentialsProvider
-          ],
+    console.error(
+      '[auth] User provisioning failed:',
+      error
+    );
 
-    callbacks: {
-      async signIn({
-        user
-      }) {
-        if (!user.email) {
-          return false;
+    return null;
+  }
+}
+
+export const authOptions: NextAuthOptions = {
+  secret: process.env.NEXTAUTH_SECRET,
+
+  providers: [
+    GoogleProvider({
+      clientId:
+        process.env.GOOGLE_CLIENT_ID ?? '',
+      clientSecret:
+        process.env.GOOGLE_CLIENT_SECRET ?? '',
+    }),
+
+    CredentialsProvider({
+      name: 'Credentials',
+
+      credentials: {
+        email: {
+          label: 'Email',
+          type: 'email',
+        },
+        password: {
+          label: 'Password',
+          type: 'password',
+        },
+      },
+
+      async authorize(credentials) {
+        const email =
+          normalizeEmail(credentials?.email);
+
+        const password =
+          credentials?.password;
+
+        if (!email || !password) {
+          return null;
         }
 
         try {
-          const userId =
-            await provisionUser(
-              user.email,
-              user.name,
-              user.image
-            );
+          const user =
+            await findUserByEmail(email);
 
-          if (!userId) {
-            return false;
+          if (
+            !user ||
+            !user.passwordHash
+          ) {
+            return null;
           }
 
-          user.id = userId;
+          const valid =
+            await verifyPassword(
+              password,
+              user.passwordHash
+            );
 
-          return true;
+          if (!valid) {
+            return null;
+          }
+
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.avatarUrl,
+          };
         } catch (error) {
           console.error(
-            '[auth] Sign-in provisioning failed:',
+            '[auth] Credentials authorization failed:',
             error
+          );
+
+          return null;
+        }
+      },
+    }),
+  ],
+
+  session: {
+    strategy: 'jwt',
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    updateAge: 24 * 60 * 60,
+  },
+
+  pages: {
+    signIn: '/login',
+  },
+
+  callbacks: {
+    async signIn({
+      user,
+      account,
+    }) {
+      /*
+       * Credentials users are already validated
+       * by CredentialsProvider.authorize().
+       */
+      if (
+        account?.provider === 'credentials'
+      ) {
+        return true;
+      }
+
+      /*
+       * Google users are automatically provisioned
+       * into our users table.
+       */
+      if (
+        account?.provider === 'google'
+      ) {
+        const userId =
+          await provisionUser(user);
+
+        if (!userId) {
+          console.error(
+            '[auth] Google user provisioning failed.'
           );
 
           return false;
         }
-      },
 
-      async jwt({
-        token,
-        user
-      }) {
-        const typedToken =
-          token as MeridianToken;
+        user.id = userId;
 
-        if (user?.id) {
-          typedToken.sub =
-            user.id;
+        return true;
+      }
+
+      return true;
+    },
+
+    async jwt({
+      token,
+      user,
+    }) {
+      const appToken =
+        token as AppToken;
+
+      /*
+       * Initial sign-in.
+       */
+      if (user) {
+        const appUser =
+          user as AppUser;
+
+        let userId =
+          appUser.id?.trim();
+
+        if (!userId) {
+          const email =
+            normalizeEmail(appUser.email);
+
+          if (email) {
+            const databaseUser =
+              await findUserByEmail(email);
+
+            userId =
+              databaseUser?.id;
+          }
         }
 
-        if (user?.email) {
-          typedToken.email =
-            user.email;
-        }
+        if (userId) {
+          appToken.userId =
+            userId;
 
-        if (user?.name) {
-          typedToken.name =
-            user.name;
-        }
-
-        if (user?.image) {
-          typedToken.picture =
-            user.image;
-        }
-
-        if (typedToken.sub) {
           const sessionId =
-            await ensureDatabaseSession(
-              typedToken
+            await createAuthSession(
+              userId
             );
 
           if (sessionId) {
-            typedToken.sessionId =
+            appToken.sessionId =
               sessionId;
-          } else {
-            delete typedToken.sessionId;
           }
         }
 
-        return typedToken;
-      },
-
-      async session({
-        session,
-        token
-      }) {
-        const typedToken =
-          token as MeridianToken;
-
-        const sessionUser =
-          session.user as MeridianSessionUser;
-
-        if (!typedToken.sub) {
-          return {
-            ...session,
-            user: undefined
-          };
-        }
-
         /*
-         * Self-healing:
-         * If authSessions was deleted/expired,
-         * create a fresh DB session instead of
-         * immediately breaking authentication.
+         * Keep the standard NextAuth fields too.
          */
-        const sessionId =
-          await ensureDatabaseSession(
-            typedToken
-          );
-
-        if (!sessionId) {
-          return {
-            ...session,
-            user: undefined
-          };
+        if (appUser.email) {
+          appToken.email =
+            appUser.email;
         }
 
-        typedToken.sessionId =
-          sessionId;
+        if (appUser.name) {
+          appToken.name =
+            appUser.name;
+        }
 
-        sessionUser.id =
-          typedToken.sub;
+        if (appUser.image) {
+          appToken.picture =
+            appUser.image;
+        }
+      }
 
-        sessionUser.sessionId =
-          sessionId;
-
-        sessionUser.email =
-          typedToken.email ??
-          sessionUser.email ??
-          null;
-
-        sessionUser.name =
-          typedToken.name ??
-          sessionUser.name ??
-          null;
-
-        sessionUser.image =
-          typedToken.picture ??
-          sessionUser.image ??
-          null;
-
-        try {
-          const db = getDb();
-
-          await db
-            .update(authSessions)
-            .set({
-              lastSeenAt:
-                new Date()
-            })
-            .where(
-              and(
-                eq(
-                  authSessions.id,
-                  sessionId
-                ),
-                eq(
-                  authSessions.userId,
-                  typedToken.sub
-                )
-              )
-            );
-        } catch (error) {
-          console.error(
-            '[auth] Session activity update failed:',
-            error
+      /*
+       * JWT is the source of truth.
+       *
+       * We deliberately DO NOT query authSessions
+       * here and we never return an invalid/empty token
+       * just because the database session is unavailable.
+       */
+      if (appToken.userId) {
+        if (appToken.sessionId) {
+          await touchAuthSession(
+            appToken.userId,
+            appToken.sessionId
           );
         }
+      }
+
+      return appToken;
+    },
+
+    async session({
+      session,
+      token,
+    }) {
+      const appToken =
+        token as AppToken;
+
+      /*
+       * Never remove session.user merely because
+       * authSessions is unavailable.
+       *
+       * The JWT remains the primary authentication
+       * mechanism.
+       */
+      if (!appToken.userId) {
+        return session;
+      }
+
+      const databaseUser =
+        await findUserById(
+          appToken.userId
+        );
+
+      if (databaseUser) {
+        session.user = {
+          ...session.user,
+          id: databaseUser.id,
+          email: databaseUser.email,
+          name:
+            databaseUser.name ??
+            session.user?.name ??
+            null,
+          image:
+            databaseUser.avatarUrl ??
+            session.user?.image ??
+            null,
+          sessionId:
+            appToken.sessionId,
+        } as typeof session.user & {
+          id: string;
+          sessionId?: string;
+        };
 
         return session;
       }
+
+      /*
+       * Even if the DB lookup temporarily fails,
+       * preserve the JWT session instead of logging
+       * the user out.
+       */
+      session.user = {
+        ...session.user,
+        id: appToken.userId,
+        sessionId:
+          appToken.sessionId,
+      } as typeof session.user & {
+        id: string;
+        sessionId?: string;
+      };
+
+      return session;
     },
+  },
 
-    events: {
-      async signOut({
-        token
-      }) {
-        const typedToken =
-          token as MeridianToken |
-            undefined;
+  events: {
+    async signOut({
+      token,
+    }) {
+      const appToken =
+        token as AppToken;
 
-        if (
-          !typedToken?.sessionId
-        ) {
-          return;
-        }
-
-        try {
-          await getDb()
-            .delete(
-              authSessions
-            )
-            .where(
-              eq(
-                authSessions.id,
-                typedToken.sessionId
-              )
-            );
-        } catch (error) {
-          console.error(
-            '[auth] Failed to revoke session:',
-            error
-          );
-        }
+      if (
+        !appToken.userId ||
+        !appToken.sessionId
+      ) {
+        return;
       }
-    }
-  };
+
+      try {
+        const db = getDb();
+
+        await db
+          .delete(authSessions)
+          .where(
+            eq(
+              authSessions.id,
+              appToken.sessionId
+            )
+          );
+      } catch (error) {
+        /*
+         * Sign-out must never fail just because
+         * the supplementary DB session cannot be deleted.
+         */
+        console.error(
+          '[auth] Database session cleanup failed:',
+          error
+        );
+      }
+    },
+  },
+
+  debug:
+    process.env.NODE_ENV === 'development',
+};
