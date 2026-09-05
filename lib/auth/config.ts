@@ -1,4 +1,7 @@
-import type { NextAuthOptions, User as NextAuthUser } from 'next-auth';
+import type {
+  NextAuthOptions,
+  User as NextAuthUser,
+} from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
 
 import GoogleProvider from 'next-auth/providers/google';
@@ -98,12 +101,6 @@ async function createAuthSession(
 
     return sessionId;
   } catch (error) {
-    /*
-     * Database sessions are supplementary.
-     *
-     * If authSessions is unavailable, do NOT destroy
-     * the valid NextAuth JWT session.
-     */
     console.error(
       '[auth] Database session creation failed:',
       error
@@ -114,7 +111,6 @@ async function createAuthSession(
 }
 
 async function touchAuthSession(
-  userId: string,
   sessionId: string
 ): Promise<void> {
   try {
@@ -130,8 +126,8 @@ async function touchAuthSession(
       );
   } catch (error) {
     /*
-     * Never invalidate the JWT because the optional
-     * database session could not be updated.
+     * authSessions is supplementary.
+     * Never invalidate the JWT because this fails.
      */
     console.error(
       '[auth] Database session update failed:',
@@ -155,8 +151,6 @@ async function provisionUser(
   }
 
   try {
-    const db = getDb();
-
     const existing =
       await findUserByEmail(email);
 
@@ -167,20 +161,23 @@ async function provisionUser(
     const userId =
       user.id?.trim() || randomUUID();
 
+    const db = getDb();
+
     await db
       .insert(users)
       .values({
         id: userId,
         email,
-        name: user.name?.trim() || null,
-        avatarUrl: user.image || null,
+        name:
+          user.name?.trim() || null,
+        avatarUrl:
+          user.image || null,
       });
 
     return userId;
   } catch (error) {
     /*
-     * Another request may have created the same
-     * user concurrently. Re-check before failing.
+     * Handle concurrent account creation.
      */
     try {
       const existing =
@@ -203,7 +200,13 @@ async function provisionUser(
 }
 
 export const authOptions: NextAuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET,
+  /*
+   * Support the existing AUTH_SECRET setup as well
+   * as the standard NEXTAUTH_SECRET name.
+   */
+  secret:
+    process.env.AUTH_SECRET ??
+    process.env.NEXTAUTH_SECRET,
 
   providers: [
     GoogleProvider({
@@ -229,7 +232,9 @@ export const authOptions: NextAuthOptions = {
 
       async authorize(credentials) {
         const email =
-          normalizeEmail(credentials?.email);
+          normalizeEmail(
+            credentials?.email
+          );
 
         const password =
           credentials?.password;
@@ -279,8 +284,10 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-    updateAge: 24 * 60 * 60,
+    maxAge:
+      SESSION_MAX_AGE_SECONDS,
+    updateAge:
+      24 * 60 * 60,
   },
 
   pages: {
@@ -293,18 +300,19 @@ export const authOptions: NextAuthOptions = {
       account,
     }) {
       /*
-       * Credentials users are already validated
-       * by CredentialsProvider.authorize().
+       * Credentials users have already been
+       * validated by authorize().
        */
       if (
-        account?.provider === 'credentials'
+        account?.provider ===
+        'credentials'
       ) {
         return true;
       }
 
       /*
-       * Google users are automatically provisioned
-       * into our users table.
+       * Google users are provisioned into
+       * our application users table.
        */
       if (
         account?.provider === 'google'
@@ -336,7 +344,7 @@ export const authOptions: NextAuthOptions = {
         token as AppToken;
 
       /*
-       * Initial sign-in.
+       * Runs when the user initially signs in.
        */
       if (user) {
         const appUser =
@@ -345,23 +353,38 @@ export const authOptions: NextAuthOptions = {
         let userId =
           appUser.id?.trim();
 
+        /*
+         * Fallback lookup by email.
+         */
         if (!userId) {
           const email =
-            normalizeEmail(appUser.email);
+            normalizeEmail(
+              appUser.email
+            );
 
           if (email) {
             const databaseUser =
-              await findUserByEmail(email);
+              await findUserByEmail(
+                email
+              );
 
             userId =
               databaseUser?.id;
           }
         }
 
+        /*
+         * Store our application user ID
+         * inside the JWT.
+         */
         if (userId) {
           appToken.userId =
             userId;
 
+          /*
+           * Database session is optional.
+           * JWT remains the primary session.
+           */
           const sessionId =
             await createAuthSession(
               userId
@@ -374,7 +397,7 @@ export const authOptions: NextAuthOptions = {
         }
 
         /*
-         * Keep the standard NextAuth fields too.
+         * Preserve standard NextAuth JWT data.
          */
         if (appUser.email) {
           appToken.email =
@@ -393,19 +416,15 @@ export const authOptions: NextAuthOptions = {
       }
 
       /*
-       * JWT is the source of truth.
+       * Touch the optional DB session.
        *
-       * We deliberately DO NOT query authSessions
-       * here and we never return an invalid/empty token
-       * just because the database session is unavailable.
+       * Failure here MUST NOT invalidate
+       * the JWT.
        */
-      if (appToken.userId) {
-        if (appToken.sessionId) {
-          await touchAuthSession(
-            appToken.userId,
-            appToken.sessionId
-          );
-        }
+      if (appToken.sessionId) {
+        await touchAuthSession(
+          appToken.sessionId
+        );
       }
 
       return appToken;
@@ -418,58 +437,78 @@ export const authOptions: NextAuthOptions = {
       const appToken =
         token as AppToken;
 
+      const userId =
+        appToken.userId;
+
       /*
-       * Never remove session.user merely because
-       * authSessions is unavailable.
-       *
-       * The JWT remains the primary authentication
-       * mechanism.
+       * No application user ID in JWT.
+       * Return the normal NextAuth session.
        */
-      if (!appToken.userId) {
-        return session;
-      }
-
-      const databaseUser =
-        await findUserById(
-          appToken.userId
-        );
-
-      if (databaseUser) {
-        session.user = {
-          ...session.user,
-          id: databaseUser.id,
-          email: databaseUser.email,
-          name:
-            databaseUser.name ??
-            session.user?.name ??
-            null,
-          image:
-            databaseUser.avatarUrl ??
-            session.user?.image ??
-            null,
-          sessionId:
-            appToken.sessionId,
-        } as typeof session.user & {
-          id: string;
-          sessionId?: string;
-        };
-
+      if (!userId) {
         return session;
       }
 
       /*
-       * Even if the DB lookup temporarily fails,
-       * preserve the JWT session instead of logging
-       * the user out.
+       * Try to load the latest application
+       * user information.
+       */
+      let databaseUser: Awaited<
+        ReturnType<typeof findUserById>
+      > = null;
+
+      try {
+        databaseUser =
+          await findUserById(userId);
+      } catch (error) {
+        /*
+         * Temporary DB failure must NOT
+         * log the user out.
+         */
+        console.error(
+          '[auth] User lookup during session failed:',
+          error
+        );
+      }
+
+      /*
+       * IMPORTANT:
+       *
+       * NextAuth's default session.user
+       * requires email to be string | null.
+       *
+       * Therefore we normalize every optional
+       * value before assigning it.
+       */
+      const email =
+        databaseUser?.email ??
+        session.user?.email ??
+        null;
+
+      const name =
+        databaseUser?.name ??
+        session.user?.name ??
+        null;
+
+      const image =
+        databaseUser?.avatarUrl ??
+        session.user?.image ??
+        null;
+
+      /*
+       * Build a fully type-safe user object.
+       *
+       * email is explicitly string | null,
+       * so TypeScript cannot produce:
+       *
+       * string | undefined -> string
        */
       session.user = {
-        ...session.user,
-        id: appToken.userId,
+        name,
+        email,
+        image,
+        id: userId,
         sessionId:
           appToken.sessionId,
-      } as typeof session.user & {
-        id: string;
-        sessionId?: string;
       };
 
       return session;
@@ -483,10 +522,7 @@ export const authOptions: NextAuthOptions = {
       const appToken =
         token as AppToken;
 
-      if (
-        !appToken.userId ||
-        !appToken.sessionId
-      ) {
+      if (!appToken.sessionId) {
         return;
       }
 
@@ -503,8 +539,8 @@ export const authOptions: NextAuthOptions = {
           );
       } catch (error) {
         /*
-         * Sign-out must never fail just because
-         * the supplementary DB session cannot be deleted.
+         * Database cleanup is best-effort.
+         * Sign-out itself must still succeed.
          */
         console.error(
           '[auth] Database session cleanup failed:',
@@ -512,8 +548,4 @@ export const authOptions: NextAuthOptions = {
         );
       }
     },
-  },
-
-  debug:
-    process.env.NODE_ENV === 'development',
-};
+ 
