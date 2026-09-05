@@ -2,25 +2,25 @@ import { getServerSession } from 'next-auth';
 import { and, eq, gt } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
-import { authOptions } from './config';
-import { getDb } from '../db/client';
+import { authOptions } from '@/lib/auth/config';
+import { getDb } from '@/lib/db/client';
 import {
   users,
   authSessions,
-} from '../db/schema';
+} from '@/lib/db/schema';
 
-const SESSION_MAX_AGE_SECONDS =
-  30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
-export class UnauthorizedError extends Error {
-  public readonly status = 401 as const;
+type ServerSession = Awaited<
+  ReturnType<typeof getServerSession>
+>;
 
-  constructor(
-    message = 'Authentication required.'
-  ) {
-    super(message);
-    this.name = 'UnauthorizedError';
-  }
+interface SessionUser {
+  id?: string;
+  sessionId?: string;
+  email?: string | null;
+  name?: string | null;
+  image?: string | null;
 }
 
 export interface CurrentUser {
@@ -31,18 +31,29 @@ export interface CurrentUser {
   sessionId: string;
 }
 
-interface SessionUser {
-  id?: string;
-  sessionId?: string;
-  email?: string | null;
-  name?: string | null;
-  image?: string | null;
+/**
+ * Error used whenever a protected API/page
+ * requires an authenticated user.
+ */
+export class UnauthorizedError extends Error {
+  public readonly status = 401 as const;
+
+  constructor(
+    message = 'Authentication required.'
+  ) {
+    super(message);
+    this.name = 'UnauthorizedError';
+
+    Object.setPrototypeOf(
+      this,
+      UnauthorizedError.prototype
+    );
+  }
 }
 
-type ServerSession = Awaited<
-  ReturnType<typeof getServerSession>
->;
-
+/**
+ * Safely extracts the Meridian session user.
+ */
 function getSessionUser(
   session: ServerSession
 ): SessionUser | null {
@@ -53,6 +64,9 @@ function getSessionUser(
   return session.user as SessionUser;
 }
 
+/**
+ * Creates a database session for the authenticated user.
+ */
 async function createDatabaseSession(
   userId: string
 ): Promise<string> {
@@ -65,18 +79,20 @@ async function createDatabaseSession(
       SESSION_MAX_AGE_SECONDS * 1000
   );
 
-  await db
-    .insert(authSessions)
-    .values({
-      id: sessionId,
-      userId,
-      expiresAt,
-      lastSeenAt: new Date(),
-    });
+  await db.insert(authSessions).values({
+    id: sessionId,
+    userId,
+    expiresAt,
+    lastSeenAt: new Date(),
+  });
 
   return sessionId;
 }
 
+/**
+ * Checks whether an existing database session
+ * is still active.
+ */
 async function getActiveSession(
   userId: string,
   sessionId: string
@@ -103,6 +119,9 @@ async function getActiveSession(
   return session ?? null;
 }
 
+/**
+ * Updates the last activity timestamp.
+ */
 async function touchSession(
   userId: string,
   sessionId: string
@@ -126,6 +145,17 @@ async function touchSession(
     );
 }
 
+/**
+ * Returns the currently authenticated Meridian user.
+ *
+ * This function:
+ * 1. Reads the NextAuth session.
+ * 2. Gets the authenticated user ID.
+ * 3. Loads the user from PostgreSQL.
+ * 4. Validates the database session.
+ * 5. Creates a new DB session when necessary.
+ * 6. Updates session activity.
+ */
 export async function getCurrentUser(): Promise<CurrentUser> {
   let session: ServerSession;
 
@@ -135,7 +165,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   } catch (error) {
     console.error(
-      '[auth] Session read failed:',
+      '[auth] Failed to read NextAuth session:',
       error
     );
 
@@ -144,8 +174,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   }
 
-  const sessionUser =
-    getSessionUser(session);
+  const sessionUser = getSessionUser(session);
 
   const userId =
     sessionUser?.id?.trim();
@@ -159,6 +188,9 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   try {
     const db = getDb();
 
+    /**
+     * Load the real user from PostgreSQL.
+     */
     const [databaseUser] = await db
       .select({
         id: users.id,
@@ -178,21 +210,29 @@ export async function getCurrentUser(): Promise<CurrentUser> {
       );
     }
 
+    /**
+     * Validate the database session supplied
+     * by the NextAuth JWT.
+     */
     let sessionId =
       sessionUser.sessionId?.trim() ?? '';
 
     if (sessionId) {
-      const active =
+      const activeSession =
         await getActiveSession(
           userId,
           sessionId
         );
 
-      if (!active) {
+      if (!activeSession) {
         sessionId = '';
       }
     }
 
+    /**
+     * Self-heal if the database session was
+     * deleted or expired.
+     */
     if (!sessionId) {
       sessionId =
         await createDatabaseSession(
@@ -200,6 +240,9 @@ export async function getCurrentUser(): Promise<CurrentUser> {
         );
     }
 
+    /**
+     * Update activity timestamp.
+     */
     await touchSession(
       userId,
       sessionId
@@ -226,7 +269,7 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     }
 
     console.error(
-      '[auth] User lookup failed:',
+      '[auth] User lookup/session verification failed:',
       error
     );
 
@@ -236,12 +279,19 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   }
 }
 
+/**
+ * Returns only the authenticated user's ID.
+ */
 export async function getCurrentUserId(): Promise<string> {
   const user = await getCurrentUser();
 
   return user.id;
 }
 
+/**
+ * Returns the authenticated user or null
+ * when the request is unauthenticated.
+ */
 export async function getOptionalCurrentUser(): Promise<
   CurrentUser | null
 > {
@@ -258,6 +308,9 @@ export async function getOptionalCurrentUser(): Promise<
   }
 }
 
+/**
+ * Checks authentication status.
+ */
 export async function isAuthenticated(): Promise<boolean> {
   try {
     await getCurrentUser();
@@ -274,6 +327,9 @@ export async function isAuthenticated(): Promise<boolean> {
   }
 }
 
+/**
+ * Type guard for authentication errors.
+ */
 export function isUnauthorizedError(
   error: unknown
 ): error is UnauthorizedError {
@@ -282,6 +338,9 @@ export function isUnauthorizedError(
   );
 }
 
+/**
+ * Standard 401 response for protected APIs.
+ */
 export function unauthorizedResponse(
   message = 'Authentication required.'
 ): Response {
