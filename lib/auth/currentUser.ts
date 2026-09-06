@@ -1,26 +1,19 @@
 import { getServerSession } from 'next-auth';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { authOptions } from '@/lib/auth/config';
 import { getDb } from '@/lib/db/client';
-import {
-  users,
-  authSessions
-} from '@/lib/db/schema';
+import { users, authSessions } from '@/lib/db/schema';
 
-const SESSION_MAX_AGE_SECONDS =
-  30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 export class UnauthorizedError extends Error {
   public readonly status = 401 as const;
 
-  constructor(
-    message = 'Authentication required.'
-  ) {
+  constructor(message = 'Authentication required.') {
     super(message);
-    this.name =
-      'UnauthorizedError';
+    this.name = 'UnauthorizedError';
   }
 }
 
@@ -44,125 +37,96 @@ type SessionUser = {
   image?: string | null;
 };
 
+/**
+ * Safely extracts the user object from the NextAuth session.
+ *
+ * We intentionally use a local type assertion here because different
+ * NextAuth/AuthOptions type configurations can expose the session
+ * user fields differently to TypeScript.
+ */
 function getSessionUser(
   session: ServerSession
 ): SessionUser | null {
-  const sessionWithUser =
-    session as
-      | (ServerSession & {
-          user?: SessionUser | null;
-        })
-      | null;
+  const sessionWithUser = session as
+    | (ServerSession & {
+        user?: SessionUser | null;
+      })
+    | null;
 
-  return (
-    sessionWithUser?.user ??
-    null
-  );
+  return sessionWithUser?.user ?? null;
 }
 
-/**
- * Creates an application-level database
- * session.
- *
- * IMPORTANT:
- * This is supplementary only.
- * Failure here must NEVER invalidate
- * an otherwise valid NextAuth session.
- */
 async function createDatabaseSession(
   userId: string
-): Promise<string | null> {
-  try {
-    const db = getDb();
+): Promise<string> {
+  const db = getDb();
 
-    const id = randomUUID();
+  const id = randomUUID();
 
-    const expiresAt =
-      new Date(
-        Date.now() +
-          SESSION_MAX_AGE_SECONDS *
-            1000
-      );
+  const expiresAt = new Date(
+    Date.now() + SESSION_MAX_AGE_SECONDS * 1000
+  );
 
-    await db
-      .insert(authSessions)
-      .values({
-        id,
-        userId,
-        expiresAt
-      });
+  await db.insert(authSessions).values({
+    id,
+    userId,
+    expiresAt,
+  });
 
-    return id;
-  } catch (error) {
-    console.error(
-      '[auth] Could not create database session. Continuing with JWT authentication:',
-      error
-    );
-
-    return null;
-  }
+  return id;
 }
 
-/**
- * Updates an application database session.
- *
- * Failure is intentionally ignored because
- * authSessions is not the source of truth.
- */
-async function touchDatabaseSession(
+async function getActiveSession(
+  userId: string,
+  sessionId: string
+) {
+  const db = getDb();
+
+  const [session] = await db
+    .select({
+      id: authSessions.id,
+    })
+    .from(authSessions)
+    .where(
+      and(
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(authSessions.expiresAt, new Date())
+      )
+    )
+    .limit(1);
+
+  return session ?? null;
+}
+
+async function touchSession(
   userId: string,
   sessionId: string
 ): Promise<void> {
-  try {
-    const db = getDb();
+  const db = getDb();
 
-    await db
-      .update(authSessions)
-      .set({
-        lastSeenAt:
-          new Date()
-      })
-      .where(
-        eq(
-          authSessions.id,
-          sessionId
-        )
-      );
-  } catch (error) {
-    console.error(
-      '[auth] Could not update database session:',
-      error
+  await db
+    .update(authSessions)
+    .set({
+      lastSeenAt: new Date(),
+    })
+    .where(
+      and(
+        eq(authSessions.id, sessionId),
+        eq(authSessions.userId, userId),
+        gt(authSessions.expiresAt, new Date())
+      )
     );
-  }
 }
 
-/**
- * Resolve the currently authenticated user.
- *
- * Authentication source:
- *
- *     NextAuth JWT
- *
- * Database session:
- *
- *     Supplementary only
- */
 export async function getCurrentUser(): Promise<CurrentUser> {
   let session: ServerSession;
 
-  /*
-   * -------------------------------------------------------
-   * 1. Read NextAuth session
-   * -------------------------------------------------------
-   */
   try {
-    session =
-      await getServerSession(
-        authOptions
-      );
+    session = await getServerSession(authOptions);
   } catch (error) {
     console.error(
-      '[auth] NextAuth session read failed:',
+      '[auth] Session read failed:',
       error
     );
 
@@ -171,12 +135,12 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   }
 
-  const sessionUser =
-    getSessionUser(session);
+  const sessionUser = getSessionUser(session);
 
   /*
-   * A missing NextAuth session really means
-   * the user is not authenticated.
+   * Explicitly guard against a missing session user.
+   * This also makes sessionUser non-null for all code below,
+   * avoiding TS18047 errors.
    */
   if (!sessionUser) {
     throw new UnauthorizedError(
@@ -184,230 +148,120 @@ export async function getCurrentUser(): Promise<CurrentUser> {
     );
   }
 
-  /*
-   * -------------------------------------------------------
-   * 2. Resolve user ID
-   * -------------------------------------------------------
-   *
-   * Prefer session.user.id.
-   *
-   * If older/stale NextAuth session data does
-   * not contain id, fall back to email.
-   */
-  let userId =
-    sessionUser.id?.trim() ??
-    '';
+  const userId = sessionUser.id?.trim();
 
+  if (!userId) {
+    throw new UnauthorizedError(
+      'You must be signed in to continue.'
+    );
+  }
+
+  /*
+   * Step 1: look up the user row. A real "you're not signed in"
+   * outcome (row missing) becomes UnauthorizedError. Any other
+   * failure (DB unreachable, pool exhausted, network blip) is a
+   * transient infrastructure error, NOT proof the session is
+   * invalid — it must NOT force a logout, so it is rethrown as-is
+   * and left for the caller to report as a 500/retryable error.
+   */
   let databaseUser:
-    | {
-        id: string;
-        email: string;
-        name: string | null;
-        avatarUrl: string | null;
-      }
-    | null = null;
+    | { id: string; email: string; name: string | null; avatarUrl: string | null }
+    | undefined;
 
   try {
     const db = getDb();
 
-    /*
-     * First try by user ID.
-     */
-    if (userId) {
-      const [user] =
-        await db
-          .select({
-            id: users.id,
-            email: users.email,
-            name: users.name,
-            avatarUrl:
-              users.avatarUrl
-          })
-          .from(users)
-          .where(
-            eq(
-              users.id,
-              userId
-            )
-          )
-          .limit(1);
-
-      databaseUser =
-        user ?? null;
-    }
-
-    /*
-     * -----------------------------------------------------
-     * Fallback: resolve account using email.
-     * -----------------------------------------------------
-     *
-     * This is important for Google sessions created
-     * before the local user ID was attached.
-     */
-    if (
-      !databaseUser &&
-      sessionUser.email
-    ) {
-      const email =
-        sessionUser.email
-          .trim()
-          .toLowerCase();
-
-      if (email) {
-        const [user] =
-          await db
-            .select({
-              id: users.id,
-              email: users.email,
-              name: users.name,
-              avatarUrl:
-                users.avatarUrl
-            })
-            .from(users)
-            .where(
-              eq(
-                users.email,
-                email
-              )
-            )
-            .limit(1);
-
-        databaseUser =
-          user ?? null;
-      }
-    }
+    [databaseUser] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
   } catch (error) {
     console.error(
-      '[auth] User lookup failed:',
+      '[auth] User lookup failed (treating as transient, not logging out):',
       error
     );
 
-    throw new UnauthorizedError(
-      'Unable to verify your authentication session.'
-    );
+    throw error;
   }
 
-  /*
-   * We have a valid NextAuth session but
-   * no corresponding Meridian account.
-   */
   if (!databaseUser) {
     throw new UnauthorizedError(
-      'Your Meridian account could not be found. Please sign in again.'
+      'Your account could not be found. Please sign in again.'
     );
   }
 
   /*
-   * Make sure we always have the local
-   * database user ID from this point onward.
-   */
-  userId =
-    databaseUser.id;
-
-  /*
-   * -------------------------------------------------------
-   * 3. Database session handling
-   * -------------------------------------------------------
-   *
-   * IMPORTANT:
-   * authSessions is OPTIONAL.
-   *
-   * If it doesn't exist, is expired, or
-   * cannot be written, authentication
-   * must continue because NextAuth JWT
-   * already authenticated the user.
+   * Step 2: resolve/heal the database session. Failures here are
+   * also transient infra errors, not "please sign in again".
    */
   let sessionId =
-    sessionUser.sessionId?.trim() ??
-    '';
+    sessionUser.sessionId?.trim() ?? '';
 
-  /*
-   * If there is no session ID in the
-   * NextAuth session, create one.
-   */
-  if (!sessionId) {
-    const newSessionId =
-      await createDatabaseSession(
-        userId
-      );
+  try {
+    if (sessionId) {
+      const activeSession =
+        await getActiveSession(
+          userId,
+          sessionId
+        );
 
-    if (newSessionId) {
-      sessionId =
-        newSessionId;
+      if (!activeSession) {
+        sessionId = '';
+      }
     }
+
+    if (!sessionId) {
+      sessionId =
+        await createDatabaseSession(userId);
+    }
+
+    await touchSession(
+      userId,
+      sessionId
+    );
+  } catch (error) {
+    console.error(
+      '[auth] Session heal/touch failed (treating as transient, not logging out):',
+      error
+    );
+
+    throw error;
   }
 
-  /*
-   * If database session creation failed,
-   * generate an in-memory ID so the
-   * CurrentUser contract remains valid.
-   *
-   * This ID is NOT treated as an authentication
-   * credential. JWT is still the source of truth.
-   */
-  if (!sessionId) {
-    sessionId =
-      randomUUID();
-  }
-
-  /*
-   * Best-effort session activity update.
-   */
-  await touchDatabaseSession(
-    userId,
-    sessionId
-  );
-
-  /*
-   * -------------------------------------------------------
-   * 4. Return authenticated user
-   * -------------------------------------------------------
-   */
   return {
-    id:
-      databaseUser.id,
-
-    email:
-      databaseUser.email,
-
+    id: databaseUser.id,
+    email: databaseUser.email,
     name:
       databaseUser.name ??
       sessionUser.name ??
       null,
-
     image:
       databaseUser.avatarUrl ??
       sessionUser.image ??
       null,
-
-    sessionId
+    sessionId,
   };
 }
 
-/**
- * Returns only the authenticated
- * Meridian user ID.
- */
 export async function getCurrentUserId(): Promise<string> {
-  const user =
-    await getCurrentUser();
+  const user = await getCurrentUser();
 
   return user.id;
 }
 
-/**
- * Optional authentication helper.
- */
 export async function getOptionalCurrentUser(): Promise<
   CurrentUser | null
 > {
   try {
     return await getCurrentUser();
   } catch (error) {
-    if (
-      error instanceof
-      UnauthorizedError
-    ) {
+    if (error instanceof UnauthorizedError) {
       return null;
     }
 
@@ -415,20 +269,13 @@ export async function getOptionalCurrentUser(): Promise<
   }
 }
 
-/**
- * Checks whether a valid NextAuth
- * session exists.
- */
 export async function isAuthenticated(): Promise<boolean> {
   try {
     await getCurrentUser();
 
     return true;
   } catch (error) {
-    if (
-      error instanceof
-      UnauthorizedError
-    ) {
+    if (error instanceof UnauthorizedError) {
       return false;
     }
 
@@ -439,10 +286,7 @@ export async function isAuthenticated(): Promise<boolean> {
 export function isUnauthorizedError(
   error: unknown
 ): error is UnauthorizedError {
-  return (
-    error instanceof
-    UnauthorizedError
-  );
+  return error instanceof UnauthorizedError;
 }
 
 export function unauthorizedResponse(
@@ -450,12 +294,11 @@ export function unauthorizedResponse(
 ): Response {
   return Response.json(
     {
-      error:
-        'UNAUTHORIZED',
-      message
+      error: 'UNAUTHORIZED',
+      message,
     },
     {
-      status: 401
+      status: 401,
     }
   );
 }
