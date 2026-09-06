@@ -172,27 +172,29 @@ async function provisionUser(
   );
 
   if (!email) {
+    console.error(
+      '[auth] Provisioning rejected: no email on account.'
+    );
+
     return null;
   }
 
+  const db = getDb();
+
   try {
-    const existing =
-      await findUserByEmail(email);
-
-    if (existing) {
-      return existing.id;
-    }
-
-    const userId =
-      user.id?.trim() ||
-      randomUUID();
-
-    const db = getDb();
-
-    await db
+    /*
+     * Single atomic upsert instead of "check then insert" —
+     * this removes the race condition where two concurrent
+     * sign-in requests for the same brand-new email both see
+     * "no existing user" and both try to insert, with one of
+     * them failing on the unique email constraint.
+     */
+    const [row] = await db
       .insert(users)
       .values({
-        id: userId,
+        id:
+          user.id?.trim() ||
+          randomUUID(),
         email,
         name:
           user.name?.trim() ||
@@ -200,10 +202,37 @@ async function provisionUser(
         avatarUrl:
           user.image ||
           null,
+      })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: {
+          name:
+            user.name?.trim() ||
+            null,
+          avatarUrl:
+            user.image || null,
+        },
+      })
+      .returning({
+        id: users.id,
       });
 
-    return userId;
+    if (row?.id) {
+      return row.id;
+    }
+
+    console.error(
+      '[auth] Provisioning upsert returned no row for:',
+      email
+    );
+
+    return null;
   } catch (error) {
+    /*
+     * Last resort: the upsert itself failed for some other
+     * reason (e.g. a transient DB error). Try a plain lookup
+     * before giving up — the user may already exist.
+     */
     try {
       const existing =
         await findUserByEmail(email);
@@ -216,7 +245,9 @@ async function provisionUser(
     }
 
     console.error(
-      '[auth] User provisioning failed:',
+      '[auth] User provisioning failed for',
+      email,
+      ':',
       error
     );
 
@@ -355,16 +386,6 @@ export const authOptions: NextAuthOptions = {
           );
         }
 
-        /*
-         * IMPORTANT: if we could not resolve/create a proper
-         * internal (UUID) user record, we must NOT let sign-in
-         * proceed with Google's raw account id as `user.id` —
-         * every downstream query expects a UUID, and using the
-         * raw Google id causes hard DB errors ("invalid input
-         * syntax for type uuid") on every subsequent request.
-         * Reject sign-in instead so NextAuth shows a clean
-         * "try again" error on /login.
-         */
         return false;
       }
 
@@ -385,14 +406,6 @@ export const authOptions: NextAuthOptions = {
         const UUID_RE =
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-        /*
-         * Only trust appUser.id if it is actually a UUID —
-         * our database columns are typed uuid, so a raw
-         * provider id (e.g. Google's numeric account id,
-         * left behind by a failed provisioning step) must
-         * never be used directly. Otherwise fall back to
-         * the email lookup below.
-         */
         let userId:
           | string
           | undefined =
@@ -401,10 +414,6 @@ export const authOptions: NextAuthOptions = {
             ? appUser.id.trim()
             : undefined;
 
-        /*
-         * If our local user ID is not
-         * available, find the user by email.
-         */
         if (!userId) {
           const email =
             normalizeEmail(
@@ -422,10 +431,6 @@ export const authOptions: NextAuthOptions = {
                 userId =
                   databaseUser.id;
               } else {
-                /*
-                 * Try provisioning the Google
-                 * account one more time.
-                 */
                 const provisionedId =
                   await provisionUser({
                     email:
@@ -450,10 +455,6 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
-        /*
-         * Explicit narrowing guarantees that
-         * createAuthSession receives a string.
-         */
         if (
           typeof userId === 'string' &&
           userId.length > 0
@@ -488,10 +489,6 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
-      /*
-       * Database session is supplementary.
-       * JWT remains the primary source of truth.
-       */
       if (appToken.sessionId) {
         await touchAuthSession(
           appToken.sessionId
