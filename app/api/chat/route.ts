@@ -192,12 +192,34 @@ export async function POST(
     userId =
       await getCurrentUserId();
   } catch (err) {
-    return jsonError(
-      'Authentication required.',
+    console.error(
+      '[chat] auth check failed:',
+      {
+        requestId,
+        error: err
+      }
+    );
+
+    if (
       err instanceof
-        UnauthorizedError
-        ? 401
-        : 500,
+      UnauthorizedError
+    ) {
+      return jsonError(
+        err.message ||
+          'Authentication required.',
+        401,
+        requestId
+      );
+    }
+
+    /*
+     * Not an auth problem — a real server/DB error while
+     * checking auth. Say so instead of implying the user
+     * needs to log in again.
+     */
+    return jsonError(
+      'Unable to verify your session right now. Please try again in a moment.',
+      500,
       requestId
     );
   }
