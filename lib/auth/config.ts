@@ -26,7 +26,7 @@ interface AppToken extends JWT {
 }
 
 interface AppUser extends NextAuthUser {
-  id?: string;
+  id: string;
   sessionId?: string;
 }
 
@@ -176,10 +176,6 @@ async function provisionUser(
   }
 
   try {
-    /*
-     * First check whether the Google
-     * account already exists.
-     */
     const existing =
       await findUserByEmail(email);
 
@@ -187,9 +183,6 @@ async function provisionUser(
       return existing.id;
     }
 
-    /*
-     * Create a new local Meridian user.
-     */
     const userId =
       user.id?.trim() ||
       randomUUID();
@@ -211,11 +204,6 @@ async function provisionUser(
 
     return userId;
   } catch (error) {
-    /*
-     * A race condition can happen when
-     * the same Google account is created
-     * twice at almost the same time.
-     */
     try {
       const existing =
         await findUserByEmail(email);
@@ -237,9 +225,6 @@ async function provisionUser(
 }
 
 export const authOptions: NextAuthOptions = {
-  /*
-   * Support both secret names.
-   */
   secret:
     process.env.AUTH_SECRET ??
     process.env.NEXTAUTH_SECRET,
@@ -339,10 +324,6 @@ export const authOptions: NextAuthOptions = {
       user,
       account,
     }) {
-      /*
-       * Credentials login is already
-       * validated inside authorize().
-       */
       if (
         account?.provider ===
         'credentials'
@@ -350,14 +331,6 @@ export const authOptions: NextAuthOptions = {
         return true;
       }
 
-      /*
-       * Google authentication:
-       *
-       * IMPORTANT:
-       * Never reject a valid Google login
-       * merely because local DB provisioning
-       * temporarily fails.
-       */
       if (
         account?.provider ===
         'google'
@@ -370,16 +343,20 @@ export const authOptions: NextAuthOptions = {
             user.id = userId;
           } else {
             console.error(
-              '[auth] Google user could not be provisioned. Continuing with Google authentication.'
+              '[auth] Google user could not be provisioned.'
             );
           }
         } catch (error) {
           console.error(
-            '[auth] Google provisioning exception. Continuing with authentication:',
+            '[auth] Google provisioning failed:',
             error
           );
         }
 
+        /*
+         * Do not reject Google authentication
+         * because local DB provisioning failed.
+         */
         return true;
       }
 
@@ -393,10 +370,6 @@ export const authOptions: NextAuthOptions = {
       const appToken =
         token as AppToken;
 
-      /*
-       * This block runs when the user
-       * first signs in.
-       */
       if (user) {
         const appUser =
           user as AppUser;
@@ -407,8 +380,8 @@ export const authOptions: NextAuthOptions = {
           appUser.id?.trim();
 
         /*
-         * If Google didn't provide our local
-         * user ID, resolve it from email.
+         * If our local user ID is not
+         * available, find the user by email.
          */
         if (!userId) {
           const email =
@@ -428,24 +401,27 @@ export const authOptions: NextAuthOptions = {
                   databaseUser.id;
               } else {
                 /*
-                 * Last attempt to provision
-                 * the user from the JWT callback.
+                 * Try provisioning the Google
+                 * account one more time.
                  */
-                userId =
+                const provisionedId =
                   await provisionUser({
-                    id: undefined,
                     email:
                       appUser.email,
                     name:
                       appUser.name,
                     image:
                       appUser.image,
-                  }) ??
-                  undefined;
+                  });
+
+                if (provisionedId) {
+                  userId =
+                    provisionedId;
+                }
               }
             } catch (error) {
               console.error(
-                '[auth] Google user lookup failed:',
+                '[auth] User lookup failed:',
                 error
               );
             }
@@ -453,8 +429,8 @@ export const authOptions: NextAuthOptions = {
         }
 
         /*
-         * Only create the database session
-         * when we have a guaranteed user ID.
+         * Explicit narrowing guarantees that
+         * createAuthSession receives a string.
          */
         if (
           typeof userId === 'string' &&
@@ -492,7 +468,7 @@ export const authOptions: NextAuthOptions = {
 
       /*
        * Database session is supplementary.
-       * JWT remains the source of truth.
+       * JWT remains the primary source of truth.
        */
       if (appToken.sessionId) {
         await touchAuthSession(
@@ -513,11 +489,6 @@ export const authOptions: NextAuthOptions = {
       const userId =
         appToken.userId;
 
-      /*
-       * If the JWT doesn't have our local
-       * user ID, preserve the session instead
-       * of destroying it.
-       */
       if (!userId) {
         return session;
       }
