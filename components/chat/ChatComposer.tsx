@@ -93,6 +93,16 @@ export function ChatComposer({
   const recognitionRef =
     useRef<any>(null);
 
+  /*
+   * Always-current refs so the SpeechRecognition callbacks
+   * (registered once on mount) never read stale values —
+   * this was the root cause of voice input silently breaking
+   * or clobbering already-typed text.
+   */
+  const valueRef = useRef(value);
+  const onChangeRef = useRef(onChange);
+  const shouldRecordRef = useRef(false);
+
   const [attachments, setAttachments] =
     useState<PendingAttachment[]>([]);
 
@@ -147,6 +157,14 @@ export function ChatComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments]);
 
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
   /*
    * ---------------------------------------------------------
    * Browser speech recognition
@@ -173,7 +191,10 @@ export function ChatComposer({
     let baseValue = '';
 
     recognition.onstart = () => {
-      baseValue = value;
+      // Read from the ref, not the closed-over `value` —
+      // this always reflects what's currently in the box,
+      // even across restarts.
+      baseValue = valueRef.current;
     };
 
     recognition.onresult = (event: any) => {
@@ -192,20 +213,59 @@ export function ChatComposer({
         ? `${baseValue} ${transcript}`
         : transcript;
 
-      onChange(nextValue);
+      onChangeRef.current(nextValue);
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
+      /*
+       * "no-speech" just means it timed out waiting for
+       * audio — not a real failure. Let onend decide
+       * whether to restart; don't flip the UI off for it.
+       */
+      if (event?.error === 'no-speech') {
+        return;
+      }
+
+      if (
+        event?.error === 'not-allowed' ||
+        event?.error === 'service-not-allowed'
+      ) {
+        shouldRecordRef.current = false;
+        setRecording(false);
+
+        return;
+      }
+
+      shouldRecordRef.current = false;
       setRecording(false);
     };
 
     recognition.onend = () => {
+      /*
+       * Mobile Chrome (Android) frequently stops recognition
+       * on its own after a few seconds even with
+       * `continuous = true`. If the user hasn't explicitly
+       * stopped recording, restart automatically so voice
+       * input doesn't appear to silently die mid-sentence.
+       */
+      if (shouldRecordRef.current) {
+        try {
+          recognition.start();
+
+          return;
+        } catch {
+          // Fall through to marking recording as stopped.
+        }
+      }
+
       setRecording(false);
     };
 
     recognitionRef.current = recognition;
 
     return () => {
+      shouldRecordRef.current = false;
+
       try {
         recognition.stop();
       } catch {
@@ -225,6 +285,8 @@ export function ChatComposer({
     if (!recognitionRef.current) return;
 
     if (recording) {
+      shouldRecordRef.current = false;
+
       try {
         recognitionRef.current.stop();
       } catch {
@@ -236,12 +298,15 @@ export function ChatComposer({
     }
 
     try {
+      shouldRecordRef.current = true;
       recognitionRef.current.start();
       setRecording(true);
     } catch {
+      shouldRecordRef.current = false;
       setRecording(false);
     }
   }
+
 
   /*
    * ---------------------------------------------------------
