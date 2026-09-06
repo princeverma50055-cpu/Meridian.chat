@@ -75,10 +75,30 @@ export async function requireUser(): Promise<AuthenticatedUser> {
     throw new UnauthorizedError('Your session has expired. Please sign in again.');
   }
 
-  try {
-    const db = getDb();
+  /*
+   * IMPORTANT: only a genuine "this session is not valid" outcome
+   * (no row found, or the row is expired) should become an
+   * UnauthorizedError and force a logout. A thrown error from the
+   * query itself (DB unreachable, pool exhausted, timeout, etc.)
+   * is an infrastructure problem, not proof the session is bad —
+   * it is rethrown as-is so callers surface it as a 500/retryable
+   * error instead of kicking a legitimately signed-in user out.
+   */
+  let authenticatedUser:
+    | {
+        id: string;
+        email: string;
+        name: string | null;
+        avatarUrl: string | null;
+        sessionId: string;
+        sessionExpiresAt: Date;
+      }
+    | undefined;
 
-    const [authenticatedUser] = await db
+  const db = getDb();
+
+  try {
+    [authenticatedUser] = await db
       .select({
         id: users.id,
         email: users.email,
@@ -98,14 +118,23 @@ export async function requireUser(): Promise<AuthenticatedUser> {
         )
       )
       .limit(1);
+  } catch (error) {
+    console.error(
+      '[auth] Failed to validate authenticated user (treating as transient, not logging out):',
+      error
+    );
 
-    if (!authenticatedUser) {
-      throw new UnauthorizedError(
-        'Your session has expired or has been revoked. Please sign in again.'
-      );
-    }
+    throw error;
+  }
 
-    if (isExpired(authenticatedUser.sessionExpiresAt)) {
+  if (!authenticatedUser) {
+    throw new UnauthorizedError(
+      'Your session has expired or has been revoked. Please sign in again.'
+    );
+  }
+
+  if (isExpired(authenticatedUser.sessionExpiresAt)) {
+    try {
       await db
         .delete(authSessions)
         .where(
@@ -114,12 +143,16 @@ export async function requireUser(): Promise<AuthenticatedUser> {
             eq(authSessions.userId, userId)
           )
         );
-
-      throw new UnauthorizedError(
-        'Your session has expired. Please sign in again.'
-      );
+    } catch (error) {
+      console.error('[auth] Failed to clean up expired session:', error);
     }
 
+    throw new UnauthorizedError(
+      'Your session has expired. Please sign in again.'
+    );
+  }
+
+  try {
     await db
       .update(authSessions)
       .set({
@@ -131,25 +164,21 @@ export async function requireUser(): Promise<AuthenticatedUser> {
           eq(authSessions.userId, userId)
         )
       );
-
-    return {
-      id: authenticatedUser.id,
-      email: authenticatedUser.email,
-      name: authenticatedUser.name ?? null,
-      image: authenticatedUser.avatarUrl ?? null,
-      sessionId: authenticatedUser.sessionId
-    };
   } catch (error) {
-    if (error instanceof UnauthorizedError) {
-      throw error;
-    }
-
-    console.error('[auth] Failed to validate authenticated user:', error);
-
-    throw new UnauthorizedError(
-      'Unable to verify your authentication session. Please sign in again.'
-    );
+    /*
+     * Failing to update "last seen" is not worth logging the
+     * user out over — log it and continue.
+     */
+    console.error('[auth] Failed to touch session lastSeenAt:', error);
   }
+
+  return {
+    id: authenticatedUser.id,
+    email: authenticatedUser.email,
+    name: authenticatedUser.name ?? null,
+    image: authenticatedUser.avatarUrl ?? null,
+    sessionId: authenticatedUser.sessionId
+  };
 }
 
 export async function requireUserId(): Promise<string> {
