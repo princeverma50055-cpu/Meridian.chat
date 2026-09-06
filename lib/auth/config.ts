@@ -17,7 +17,8 @@ import {
 } from '@/lib/db/schema';
 import { verifyPassword } from '@/lib/auth/password';
 
-const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS =
+  30 * 24 * 60 * 60;
 
 interface AppToken extends JWT {
   userId?: string;
@@ -25,7 +26,7 @@ interface AppToken extends JWT {
 }
 
 interface AppUser extends NextAuthUser {
-  id: string;
+  id?: string;
   sessionId?: string;
 }
 
@@ -61,7 +62,9 @@ function normalizeEmail(
   return value || null;
 }
 
-async function findUserByEmail(email: string) {
+async function findUserByEmail(
+  email: string
+) {
   const db = getDb();
 
   const [user] = await db
@@ -79,7 +82,9 @@ async function findUserByEmail(email: string) {
   return user ?? null;
 }
 
-async function findUserById(userId: string) {
+async function findUserById(
+  userId: string
+) {
   const db = getDb();
 
   const [user] = await db
@@ -154,27 +159,40 @@ async function touchAuthSession(
   }
 }
 
-async function provisionUser(user: {
-  id?: string;
-  email?: string | null;
-  name?: string | null;
-  image?: string | null;
-}): Promise<string | null> {
-  const email = normalizeEmail(user.email);
+async function provisionUser(
+  user: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+    image?: string | null;
+  }
+): Promise<string | null> {
+  const email = normalizeEmail(
+    user.email
+  );
 
   if (!email) {
     return null;
   }
 
   try {
-    const existing = await findUserByEmail(email);
+    /*
+     * First check whether the Google
+     * account already exists.
+     */
+    const existing =
+      await findUserByEmail(email);
 
     if (existing) {
       return existing.id;
     }
 
+    /*
+     * Create a new local Meridian user.
+     */
     const userId =
-      user.id?.trim() || randomUUID();
+      user.id?.trim() ||
+      randomUUID();
 
     const db = getDb();
 
@@ -183,14 +201,24 @@ async function provisionUser(user: {
       .values({
         id: userId,
         email,
-        name: user.name?.trim() || null,
-        avatarUrl: user.image || null,
+        name:
+          user.name?.trim() ||
+          null,
+        avatarUrl:
+          user.image ||
+          null,
       });
 
     return userId;
   } catch (error) {
+    /*
+     * A race condition can happen when
+     * the same Google account is created
+     * twice at almost the same time.
+     */
     try {
-      const existing = await findUserByEmail(email);
+      const existing =
+        await findUserByEmail(email);
 
       if (existing) {
         return existing.id;
@@ -209,6 +237,9 @@ async function provisionUser(user: {
 }
 
 export const authOptions: NextAuthOptions = {
+  /*
+   * Support both secret names.
+   */
   secret:
     process.env.AUTH_SECRET ??
     process.env.NEXTAUTH_SECRET,
@@ -216,9 +247,11 @@ export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId:
-        process.env.GOOGLE_CLIENT_ID ?? '',
+        process.env.GOOGLE_CLIENT_ID ??
+        '',
       clientSecret:
-        process.env.GOOGLE_CLIENT_SECRET ?? '',
+        process.env.GOOGLE_CLIENT_SECRET ??
+        '',
     }),
 
     CredentialsProvider({
@@ -236,9 +269,10 @@ export const authOptions: NextAuthOptions = {
       },
 
       async authorize(credentials) {
-        const email = normalizeEmail(
-          credentials?.email
-        );
+        const email =
+          normalizeEmail(
+            credentials?.email
+          );
 
         const password =
           credentials?.password;
@@ -249,7 +283,9 @@ export const authOptions: NextAuthOptions = {
 
         try {
           const user =
-            await findUserByEmail(email);
+            await findUserByEmail(
+              email
+            );
 
           if (
             !user ||
@@ -288,8 +324,10 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-    updateAge: 24 * 60 * 60,
+    maxAge:
+      SESSION_MAX_AGE_SECONDS,
+    updateAge:
+      24 * 60 * 60,
   },
 
   pages: {
@@ -301,6 +339,10 @@ export const authOptions: NextAuthOptions = {
       user,
       account,
     }) {
+      /*
+       * Credentials login is already
+       * validated inside authorize().
+       */
       if (
         account?.provider ===
         'credentials'
@@ -308,22 +350,35 @@ export const authOptions: NextAuthOptions = {
         return true;
       }
 
+      /*
+       * Google authentication:
+       *
+       * IMPORTANT:
+       * Never reject a valid Google login
+       * merely because local DB provisioning
+       * temporarily fails.
+       */
       if (
         account?.provider ===
         'google'
       ) {
-        const userId =
-          await provisionUser(user);
+        try {
+          const userId =
+            await provisionUser(user);
 
-        if (!userId) {
+          if (userId) {
+            user.id = userId;
+          } else {
+            console.error(
+              '[auth] Google user could not be provisioned. Continuing with Google authentication.'
+            );
+          }
+        } catch (error) {
           console.error(
-            '[auth] Google user provisioning failed.'
+            '[auth] Google provisioning exception. Continuing with authentication:',
+            error
           );
-
-          return false;
         }
-
-        user.id = userId;
 
         return true;
       }
@@ -338,6 +393,10 @@ export const authOptions: NextAuthOptions = {
       const appToken =
         token as AppToken;
 
+      /*
+       * This block runs when the user
+       * first signs in.
+       */
       if (user) {
         const appUser =
           user as AppUser;
@@ -347,6 +406,10 @@ export const authOptions: NextAuthOptions = {
           | undefined =
           appUser.id?.trim();
 
+        /*
+         * If Google didn't provide our local
+         * user ID, resolve it from email.
+         */
         if (!userId) {
           const email =
             normalizeEmail(
@@ -354,26 +417,51 @@ export const authOptions: NextAuthOptions = {
             );
 
           if (email) {
-            const databaseUser =
-              await findUserByEmail(
-                email
-              );
+            try {
+              const databaseUser =
+                await findUserByEmail(
+                  email
+                );
 
-            userId =
-              databaseUser?.id;
+              if (databaseUser) {
+                userId =
+                  databaseUser.id;
+              } else {
+                /*
+                 * Last attempt to provision
+                 * the user from the JWT callback.
+                 */
+                userId =
+                  await provisionUser({
+                    id: undefined,
+                    email:
+                      appUser.email,
+                    name:
+                      appUser.name,
+                    image:
+                      appUser.image,
+                  }) ??
+                  undefined;
+              }
+            } catch (error) {
+              console.error(
+                '[auth] Google user lookup failed:',
+                error
+              );
+            }
           }
         }
 
         /*
-         * Explicit type narrowing.
-         * createAuthSession() receives
-         * a guaranteed string.
+         * Only create the database session
+         * when we have a guaranteed user ID.
          */
         if (
           typeof userId === 'string' &&
           userId.length > 0
         ) {
-          appToken.userId = userId;
+          appToken.userId =
+            userId;
 
           const sessionId =
             await createAuthSession(
@@ -404,8 +492,7 @@ export const authOptions: NextAuthOptions = {
 
       /*
        * Database session is supplementary.
-       * JWT remains the authentication source
-       * of truth.
+       * JWT remains the source of truth.
        */
       if (appToken.sessionId) {
         await touchAuthSession(
@@ -426,6 +513,11 @@ export const authOptions: NextAuthOptions = {
       const userId =
         appToken.userId;
 
+      /*
+       * If the JWT doesn't have our local
+       * user ID, preserve the session instead
+       * of destroying it.
+       */
       if (!userId) {
         return session;
       }
@@ -465,10 +557,6 @@ export const authOptions: NextAuthOptions = {
         session.user?.image ??
         null;
 
-      /*
-       * Session type is extended above,
-       * so id/sessionId are valid here.
-       */
       session.user = {
         id: userId,
         sessionId:
