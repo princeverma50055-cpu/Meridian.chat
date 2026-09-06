@@ -341,11 +341,13 @@ export const authOptions: NextAuthOptions = {
 
           if (userId) {
             user.id = userId;
-          } else {
-            console.error(
-              '[auth] Google user could not be provisioned.'
-            );
+
+            return true;
           }
+
+          console.error(
+            '[auth] Google user could not be provisioned.'
+          );
         } catch (error) {
           console.error(
             '[auth] Google provisioning failed:',
@@ -354,10 +356,16 @@ export const authOptions: NextAuthOptions = {
         }
 
         /*
-         * Do not reject Google authentication
-         * because local DB provisioning failed.
+         * IMPORTANT: if we could not resolve/create a proper
+         * internal (UUID) user record, we must NOT let sign-in
+         * proceed with Google's raw account id as `user.id` —
+         * every downstream query expects a UUID, and using the
+         * raw Google id causes hard DB errors ("invalid input
+         * syntax for type uuid") on every subsequent request.
+         * Reject sign-in instead so NextAuth shows a clean
+         * "try again" error on /login.
          */
-        return true;
+        return false;
       }
 
       return true;
@@ -374,10 +382,24 @@ export const authOptions: NextAuthOptions = {
         const appUser =
           user as AppUser;
 
+        const UUID_RE =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+        /*
+         * Only trust appUser.id if it is actually a UUID —
+         * our database columns are typed uuid, so a raw
+         * provider id (e.g. Google's numeric account id,
+         * left behind by a failed provisioning step) must
+         * never be used directly. Otherwise fall back to
+         * the email lookup below.
+         */
         let userId:
           | string
           | undefined =
-          appUser.id?.trim();
+          appUser.id?.trim() &&
+          UUID_RE.test(appUser.id.trim())
+            ? appUser.id.trim()
+            : undefined;
 
         /*
          * If our local user ID is not
