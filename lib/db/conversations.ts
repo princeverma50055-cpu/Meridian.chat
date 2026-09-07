@@ -86,7 +86,11 @@ export async function listConversations(
 
 export async function createConversation(
   userId: string,
-  title = 'New chat'
+  title = 'New chat',
+  options?: {
+    projectId?: string | null;
+    agentId?: string | null;
+  }
 ) {
   const db = getDb();
 
@@ -102,7 +106,13 @@ export async function createConversation(
       .values({
         userId:
           cleanUserId(userId),
-        title: cleanTitle
+        title: cleanTitle,
+        projectId:
+          options?.projectId ??
+          null,
+        agentId:
+          options?.agentId ??
+          null
       })
       .returning();
 
