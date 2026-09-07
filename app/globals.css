@@ -11,10 +11,15 @@
 
   html {
     -webkit-text-size-adjust: 100%;
+    height: 100%;
+    overflow: hidden;
   }
 
   body {
     @apply bg-paper text-ink font-body antialiased;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   .dark body {
