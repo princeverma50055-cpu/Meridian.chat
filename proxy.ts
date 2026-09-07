@@ -127,9 +127,17 @@ function applySecurityHeaders(
     'strict-origin-when-cross-origin'
   );
 
+  /*
+   * IMPORTANT: microphone must stay allowed for our own origin —
+   * the chat composer's voice-input feature depends on
+   * getUserMedia/SpeechRecognition, both of which are silently
+   * blocked (no permission prompt at all) if this policy denies
+   * "microphone" outright. Camera/geolocation/payment are still
+   * locked down since nothing in the app uses them.
+   */
   response.headers.set(
     'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=(), payment=()'
+    'camera=(), microphone=(self), geolocation=(), payment=()'
   );
 
   response.headers.set(
@@ -304,39 +312,4 @@ export default withAuth(
           req.nextUrl.pathname;
 
         /*
-         * Public endpoints.
-         */
-        if (
-          pathname.startsWith(
-            '/api/auth/'
-          ) ||
-          pathname === '/api/health' ||
-          pathname.startsWith(
-            '/api/share/'
-          ) ||
-          pathname ===
-            '/api/security/rate-limit' ||
-          pathname ===
-            '/api/security/request-id'
-        ) {
-          return true;
-        }
-
-        return !!token;
-      }
-    }
-  }
-);
-
-export const config = {
-  matcher: [
-    '/',
-    '/c/:path*',
-    '/settings/:path*',
-    '/projects/:path*',
-    '/agents/:path*',
-    '/library/:path*',
-    '/search/:path*',
-    '/api/:path*'
-  ]
-};
+         * Public endpoint
