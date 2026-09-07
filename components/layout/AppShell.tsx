@@ -25,7 +25,7 @@ function AppShellContent({
   } = useSidebarState();
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-white text-ink dark:bg-surface-dark dark:text-paper">
+    <div className="flex h-dvh w-full overflow-hidden bg-white text-ink dark:bg-surface-dark dark:text-paper">
       {/* Desktop sidebar */}
       <div className="hidden h-full w-[280px] shrink-0 md:block">
         <Sidebar
