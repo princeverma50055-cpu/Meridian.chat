@@ -169,6 +169,31 @@ export function useChat(
     useRef(true);
 
   /*
+   * Optional project/agent context for a brand-new
+   * conversation, set once (e.g. from a "Start chat" button
+   * on the Projects/Agents pages) before the first message
+   * goes out. Ignored by the backend once a conversation
+   * already exists — its stored project/agent wins instead.
+   */
+  const chatContextRef =
+    useRef<{
+      projectId?: string;
+      agentId?: string;
+    }>({});
+
+  const setChatContext =
+    useCallback(
+      (context: {
+        projectId?: string;
+        agentId?: string;
+      }) => {
+        chatContextRef.current =
+          context;
+      },
+      []
+    );
+
+  /*
    * -------------------------------------------------------
    * Load existing conversation
    * -------------------------------------------------------
@@ -362,7 +387,15 @@ export function useChat(
                     targetConversationId,
                   fileIds,
                   webSearchEnabled,
-                  deepResearchEnabled
+                  deepResearchEnabled,
+                  projectId:
+                    chatContextRef
+                      .current
+                      .projectId,
+                  agentId:
+                    chatContextRef
+                      .current
+                      .agentId
                 }),
                 signal:
                   controller.signal
@@ -991,6 +1024,7 @@ export function useChat(
     regenerate,
     stop,
     editMessage,
-    loadConversation
+    loadConversation,
+    setChatContext
   };
 }
