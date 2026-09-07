@@ -6,9 +6,12 @@ import {
   type FormEvent
 } from 'react';
 
+import { useRouter } from 'next/navigation';
+
 import {
   Bot,
   Edit3,
+  MessageSquare,
   Plus,
   Trash2,
   X,
@@ -74,6 +77,8 @@ function getModelLabel(
 }
 
 export default function AgentsPage() {
+  const router = useRouter();
+
   const [agents, setAgents] =
     useState<Agent[]>([]);
 
@@ -553,6 +558,22 @@ export default function AgentsPage() {
                     )}
 
                     <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-border pt-3 dark:border-slate-border-dark">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() =>
+                          router.push(
+                            `/?agentId=${agent.id}`
+                          )
+                        }
+                        className="mr-auto"
+                      >
+                        <MessageSquare
+                          size={14}
+                        />
+                        Chat
+                      </Button>
+
                       <Button
                         size="sm"
                         variant="ghost"
