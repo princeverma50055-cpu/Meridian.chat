@@ -47,7 +47,7 @@ export default async function SharedConversationPage({
   ).filter((message) => message.role !== 'system');
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
+    <main className="mx-auto flex h-dvh w-full max-w-3xl flex-col gap-6 overflow-y-auto px-4 py-10 sm:px-6">
       <header className="border-b border-black/10 pb-6 dark:border-white/10">
         <p className="text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
           Shared conversation · Meridian AI
