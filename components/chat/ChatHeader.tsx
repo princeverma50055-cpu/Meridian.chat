@@ -144,7 +144,7 @@ export function ChatHeader({
       }
 
       const shareUrl =
-        `${window.location.origin}/api/share/${token}`;
+        `${window.location.origin}/share/${token}`;
 
       try {
         await navigator.clipboard.writeText(
