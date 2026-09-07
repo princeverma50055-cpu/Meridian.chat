@@ -1,11 +1,13 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Archive,
   Edit3,
   FolderKanban,
   Loader2,
+  MessageSquare,
   Plus,
   Trash2,
   X,
@@ -37,6 +39,8 @@ const EMPTY_FORM: ProjectFormState = {
 };
 
 export default function ProjectsPage() {
+  const router = useRouter();
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -328,13 +332,25 @@ export default function ProjectsPage() {
 
                   <div className="mt-auto flex items-center gap-2 pt-5">
                     <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() =>
+                        router.push(
+                          `/?projectId=${project.id}`
+                        )
+                      }
+                      className="flex-1"
+                    >
+                      <MessageSquare className="mr-2 h-4 w-4" />
+                      Chat
+                    </Button>
+
+                    <Button
                       variant="secondary"
                       size="sm"
                       onClick={() => openEdit(project)}
-                      className="flex-1"
                     >
-                      <Edit3 className="mr-2 h-4 w-4" />
-                      Edit
+                      <Edit3 className="h-4 w-4" />
                     </Button>
 
                     <Button
