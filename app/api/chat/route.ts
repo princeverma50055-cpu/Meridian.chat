@@ -38,9 +38,23 @@ import {
   addMessage,
   createConversation,
   deriveTitle,
+  getConversationForUser,
   getConversationMessages,
   renameConversation
 } from '@/lib/db/conversations';
+
+import { eq, and } from 'drizzle-orm';
+
+import { getDb } from '@/lib/db/client';
+
+import {
+  projects,
+  agents
+} from '@/lib/db/schema';
+
+import {
+  optionalUuid
+} from '@/lib/security/validation';
 
 import {
   getRequestId
@@ -59,6 +73,8 @@ interface ChatRequestBody {
   fileIds?: string[];
   webSearchEnabled?: boolean;
   deepResearchEnabled?: boolean;
+  projectId?: string;
+  agentId?: string;
 }
 
 const MAX_MESSAGE_LENGTH = 50_000;
@@ -267,14 +283,111 @@ export async function POST(
   let isNewConversation =
     false;
 
+  /*
+   * A conversation's project/agent is locked in when it's
+   * created — resolved here either from the request body
+   * (new conversation) or from the stored row (continuing
+   * one), never re-taken from the client on later turns.
+   */
+  let effectiveProjectId: string | null = null;
+  let effectiveAgentId: string | null = null;
+
+  let requestedProjectId: string | null = null;
+  let requestedAgentId: string | null = null;
+
+  try {
+    requestedProjectId =
+      optionalUuid(body.projectId);
+
+    requestedAgentId =
+      optionalUuid(body.agentId);
+  } catch {
+    return jsonError(
+      'Invalid projectId or agentId.',
+      400,
+      requestId
+    );
+  }
+
   try {
     if (!conversationId) {
+      /*
+       * Only trust a project/agent id on a brand-new
+       * conversation if it actually belongs to this user —
+       * silently ignore anything else (e.g. a stale id from
+       * a deleted project) rather than failing the whole
+       * request.
+       */
+      if (requestedProjectId) {
+        const db = getDb();
+
+        const [ownedProject] =
+          await db
+            .select({
+              id: projects.id
+            })
+            .from(projects)
+            .where(
+              and(
+                eq(
+                  projects.id,
+                  requestedProjectId
+                ),
+                eq(
+                  projects.userId,
+                  userId
+                )
+              )
+            )
+            .limit(1);
+
+        if (ownedProject) {
+          effectiveProjectId =
+            ownedProject.id;
+        }
+      }
+
+      if (requestedAgentId) {
+        const db = getDb();
+
+        const [ownedAgent] =
+          await db
+            .select({
+              id: agents.id
+            })
+            .from(agents)
+            .where(
+              and(
+                eq(
+                  agents.id,
+                  requestedAgentId
+                ),
+                eq(
+                  agents.userId,
+                  userId
+                )
+              )
+            )
+            .limit(1);
+
+        if (ownedAgent) {
+          effectiveAgentId =
+            ownedAgent.id;
+        }
+      }
+
       const created =
         await createConversation(
           userId,
           deriveTitle(
             message
-          )
+          ),
+          {
+            projectId:
+              effectiveProjectId,
+            agentId:
+              effectiveAgentId
+          }
         );
 
       if (!created) {
@@ -297,19 +410,38 @@ export async function POST(
        * This prevents another user's conversation ID
        * from being accessed.
        */
-      const existing =
-        await getConversationMessages(
+      const [
+        conversationRow,
+        existing
+      ] = await Promise.all([
+        getConversationForUser(
           conversationId,
           userId
-        );
+        ),
+        getConversationMessages(
+          conversationId,
+          userId
+        )
+      ]);
 
-      if (!existing) {
+      if (
+        !conversationRow ||
+        !existing
+      ) {
         return jsonError(
           'Conversation not found.',
           404,
           requestId
         );
       }
+
+      effectiveProjectId =
+        conversationRow.projectId ??
+        null;
+
+      effectiveAgentId =
+        conversationRow.agentId ??
+        null;
 
       history =
         existing.map(
@@ -389,6 +521,137 @@ export async function POST(
       'Only share these links when relevant to what\'s being asked — don\'t volunteer them ' +
       'unprompted in unrelated conversations.'
   });
+
+  /*
+   * ---------------------------------------------------------
+   * 5b. Project / Agent context
+   * ---------------------------------------------------------
+   * If this conversation belongs to a project and/or uses a
+   * custom agent, layer their instructions on top of the base
+   * identity prompt (inserted right after it, before memories
+   * and web search context). An agent's model choice takes
+   * priority over the model picker in the UI, since the whole
+   * point of an agent is a consistent, predictable setup.
+   */
+
+  if (
+    effectiveAgentId
+  ) {
+    try {
+      const db = getDb();
+
+      const [agent] =
+        await db
+          .select({
+            name: agents.name,
+            systemInstructions:
+              agents.systemInstructions,
+            model: agents.model
+          })
+          .from(agents)
+          .where(
+            and(
+              eq(
+                agents.id,
+                effectiveAgentId
+              ),
+              eq(
+                agents.userId,
+                userId
+              )
+            )
+          )
+          .limit(1);
+
+      if (agent) {
+        if (
+          agent.model &&
+          agent.model.trim()
+        ) {
+          try {
+            resolvedModel =
+              resolveModel(
+                agent.model
+              );
+          } catch {
+            // Keep the previously
+            // resolved model if the
+            // agent's saved model id
+            // is no longer valid.
+          }
+        }
+
+        if (
+          agent.systemInstructions?.trim()
+        ) {
+          turns.splice(1, 0, {
+            role: 'system',
+            content:
+              `You are currently acting as the custom agent "${agent.name}". Follow these ` +
+              `instructions from the user for how to behave, while still never breaking the ` +
+              `identity rules above:\n\n${agent.systemInstructions.trim()}`
+          });
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[chat] agent context load failed:',
+        {
+          requestId,
+          error: err
+        }
+      );
+    }
+  }
+
+  if (
+    effectiveProjectId
+  ) {
+    try {
+      const db = getDb();
+
+      const [project] =
+        await db
+          .select({
+            name: projects.name,
+            instructions:
+              projects.instructions
+          })
+          .from(projects)
+          .where(
+            and(
+              eq(
+                projects.id,
+                effectiveProjectId
+              ),
+              eq(
+                projects.userId,
+                userId
+              )
+            )
+          )
+          .limit(1);
+
+      if (
+        project?.instructions?.trim()
+      ) {
+        turns.splice(1, 0, {
+          role: 'system',
+          content:
+            `This conversation is part of the project "${project.name}". Apply these project-level ` +
+            `instructions from the user:\n\n${project.instructions.trim()}`
+        });
+      }
+    } catch (err) {
+      console.error(
+        '[chat] project context load failed:',
+        {
+          requestId,
+          error: err
+        }
+      );
+    }
+  }
 
   /*
    * ---------------------------------------------------------
