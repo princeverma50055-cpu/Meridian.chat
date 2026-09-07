@@ -91,6 +91,13 @@ export const conversations = pgTable('conversations', {
     }
   ),
 
+  agentId: uuid('agent_id').references(
+    () => agents.id,
+    {
+      onDelete: 'set null'
+    }
+  ),
+
   title: text('title')
     .notNull()
     .default('New chat'),
