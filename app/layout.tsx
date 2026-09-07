@@ -8,6 +8,7 @@ import {
 import { ThemeProvider } from '@/components/layout/ThemeProvider';
 import { SessionProviderWrapper } from '@/components/layout/SessionProviderWrapper';
 import { SidebarStateProvider } from '@/components/layout/SidebarContext';
+import { InstallPrompt } from '@/components/pwa/InstallPrompt';
 
 import './globals.css';
 
@@ -32,7 +33,23 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: 'Meridian — Your AI. Your Tools. Your Intelligence.',
   description:
-    'Meridian is an AI assistant platform for chat, web research, file analysis, and custom agents.'
+    'Meridian is an AI assistant platform for chat, web research, file analysis, and custom agents.',
+  manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/favicon.png', type: 'image/png' },
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+    ],
+    apple: [
+      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+    ]
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Meridian'
+  }
 };
 
 export const viewport: Viewport = {
@@ -90,6 +107,7 @@ export default function RootLayout({
           <ThemeProvider>
             <SidebarStateProvider>
               {children}
+              <InstallPrompt />
             </SidebarStateProvider>
           </ThemeProvider>
         </SessionProviderWrapper>
