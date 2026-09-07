@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useEffect,
   useState
 } from 'react';
 
@@ -44,6 +45,14 @@ export default function ChatPage() {
   ] =
     useState(false);
 
+  const [
+    startContext,
+    setStartContext
+  ] = useState<{
+    projectName?: string;
+    agentName?: string;
+  } | null>(null);
+
   const {
     messages,
     isGenerating,
@@ -52,8 +61,95 @@ export default function ChatPage() {
     stop,
     editMessage,
     conversationId,
-    conversationTitle
+    conversationTitle,
+    setChatContext
   } = useChat();
+
+  /*
+   * A "Start chat" button on the Projects or Agents page
+   * links here with ?projectId=... or ?agentId=... — pick
+   * that up once, lock it into the chat's context for the
+   * (not-yet-created) conversation, and show a small label
+   * so the person knows what they're chatting with/in.
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const params =
+      new URLSearchParams(
+        window.location.search
+      );
+
+    const projectId =
+      params.get('projectId') ||
+      undefined;
+
+    const agentId =
+      params.get('agentId') ||
+      undefined;
+
+    if (!projectId && !agentId) {
+      return;
+    }
+
+    setChatContext({
+      projectId,
+      agentId
+    });
+
+    (async () => {
+      try {
+        if (projectId) {
+          const res = await fetch(
+            `/api/projects/${projectId}`
+          );
+
+          if (res.ok) {
+            const data =
+              await res.json();
+
+            setStartContext(
+              (previous) => ({
+                ...previous,
+                projectName:
+                  data?.project
+                    ?.name
+              })
+            );
+          }
+        }
+
+        if (agentId) {
+          const res = await fetch(
+            `/api/agents/${agentId}`
+          );
+
+          if (res.ok) {
+            const data =
+              await res.json();
+
+            setStartContext(
+              (previous) => ({
+                ...previous,
+                agentName:
+                  data?.agent
+                    ?.name
+              })
+            );
+          }
+        }
+      } catch {
+        // Non-critical — the chat still works even if the
+        // label can't be fetched.
+      }
+    })();
+
+    // Only read the query string once, on first load of a
+    // brand-new chat.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleSuggestion(
     prompt: string
@@ -112,6 +208,37 @@ export default function ChatPage() {
         <ChatHeader
           title={title}
         />
+
+        {messages.length ===
+          0 &&
+        (startContext?.projectName ||
+          startContext?.agentName) ? (
+          <div className="border-b border-black/10 bg-black/[0.03] px-4 py-2 text-xs text-black/60 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/60">
+            {startContext.agentName && (
+              <span>
+                Chatting with agent{' '}
+                <strong>
+                  {
+                    startContext.agentName
+                  }
+                </strong>
+              </span>
+            )}
+            {startContext.agentName &&
+              startContext.projectName &&
+              ' · '}
+            {startContext.projectName && (
+              <span>
+                Project:{' '}
+                <strong>
+                  {
+                    startContext.projectName
+                  }
+                </strong>
+              </span>
+            )}
+          </div>
+        ) : null}
 
         <div className="min-h-0 flex-1">
           {messages.length ===
