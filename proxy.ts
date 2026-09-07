@@ -312,4 +312,39 @@ export default withAuth(
           req.nextUrl.pathname;
 
         /*
-         * Public endpoint
+         * Public endpoints.
+         */
+        if (
+          pathname.startsWith(
+            '/api/auth/'
+          ) ||
+          pathname === '/api/health' ||
+          pathname.startsWith(
+            '/api/share/'
+          ) ||
+          pathname ===
+            '/api/security/rate-limit' ||
+          pathname ===
+            '/api/security/request-id'
+        ) {
+          return true;
+        }
+
+        return !!token;
+      }
+    }
+  }
+);
+
+export const config = {
+  matcher: [
+    '/',
+    '/c/:path*',
+    '/settings/:path*',
+    '/projects/:path*',
+    '/agents/:path*',
+    '/library/:path*',
+    '/search/:path*',
+    '/api/:path*'
+  ]
+};
