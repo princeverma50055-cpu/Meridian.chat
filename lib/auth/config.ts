@@ -188,13 +188,21 @@ async function provisionUser(
      * sign-in requests for the same brand-new email both see
      * "no existing user" and both try to insert, with one of
      * them failing on the unique email constraint.
+     *
+     * IMPORTANT: always generate a fresh randomUUID() for the
+     * id column here — never use `user.id`. For a Google
+     * sign-in, `user.id` at this point is Google's own raw
+     * account id (a big numeric string, e.g. "1075569..."),
+     * not a UUID, and `users.id` is a uuid column in Postgres.
+     * Inserting the raw provider id crashes with "invalid
+     * input syntax for type uuid" for every brand-new Google
+     * account — which is exactly what silently failed
+     * provisioning and produced "Access Denied" on sign-in.
      */
     const [row] = await db
       .insert(users)
       .values({
-        id:
-          user.id?.trim() ||
-          randomUUID(),
+        id: randomUUID(),
         email,
         name:
           user.name?.trim() ||
@@ -386,6 +394,16 @@ export const authOptions: NextAuthOptions = {
           );
         }
 
+        /*
+         * IMPORTANT: if we could not resolve/create a proper
+         * internal (UUID) user record, we must NOT let sign-in
+         * proceed with Google's raw account id as `user.id` —
+         * every downstream query expects a UUID, and using the
+         * raw Google id causes hard DB errors ("invalid input
+         * syntax for type uuid") on every subsequent request.
+         * Reject sign-in instead so NextAuth shows a clean
+         * "try again" error on /login.
+         */
         return false;
       }
 
@@ -406,6 +424,14 @@ export const authOptions: NextAuthOptions = {
         const UUID_RE =
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+        /*
+         * Only trust appUser.id if it is actually a UUID —
+         * our database columns are typed uuid, so a raw
+         * provider id (e.g. Google's numeric account id,
+         * left behind by a failed provisioning step) must
+         * never be used directly. Otherwise fall back to
+         * the email lookup below.
+         */
         let userId:
           | string
           | undefined =
@@ -414,6 +440,10 @@ export const authOptions: NextAuthOptions = {
             ? appUser.id.trim()
             : undefined;
 
+        /*
+         * If our local user ID is not
+         * available, find the user by email.
+         */
         if (!userId) {
           const email =
             normalizeEmail(
@@ -431,6 +461,10 @@ export const authOptions: NextAuthOptions = {
                 userId =
                   databaseUser.id;
               } else {
+                /*
+                 * Try provisioning the Google
+                 * account one more time.
+                 */
                 const provisionedId =
                   await provisionUser({
                     email:
@@ -455,6 +489,10 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
+        /*
+         * Explicit narrowing guarantees that
+         * createAuthSession receives a string.
+         */
         if (
           typeof userId === 'string' &&
           userId.length > 0
@@ -489,6 +527,10 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
+      /*
+       * Database session is supplementary.
+       * JWT remains the primary source of truth.
+       */
       if (appToken.sessionId) {
         await touchAuthSession(
           appToken.sessionId
