@@ -1181,12 +1181,38 @@ export async function POST(
           );
 
           /*
+           * Detect an upstream AI provider quota/rate-limit
+           * error (HTTP 429) and surface a clear, actionable
+           * message instead of the generic fallback — this is
+           * genuinely different from "something broke": the
+           * app is working fine, the provider account has hit
+           * its request limit (e.g. Gemini's free-tier daily
+           * cap) and either needs billing enabled or a short
+           * wait before it resets.
+           */
+          const status =
+            (err as {
+              status?: number;
+            })?.status;
+
+          const isQuotaError =
+            status === 429 ||
+            /RESOURCE_EXHAUSTED|quota/i.test(
+              errorMessage
+            );
+
+          const displayMessage =
+            isQuotaError
+              ? 'This AI service has used up its free limit for now. Please try again after a few hours, or upgrade to continue without interruption.'
+              : 'Unable to generate a response.';
+
+          /*
            * Never expose provider/internal error details
            * directly to the client.
            */
           controller.enqueue(
             encoder.encode(
-              `\n[error] Unable to generate a response. Request ID: ${requestId}`
+              `\n[error] ${displayMessage} Request ID: ${requestId}`
             )
           );
 
